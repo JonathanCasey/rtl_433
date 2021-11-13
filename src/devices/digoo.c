@@ -1,5 +1,5 @@
 /** @file
-    Digoo PIR / Contact Sensor.
+    Digoo PIR / Contact Sensor / Remote FOB.
 
     Copyright (C) 2021 Jonathan Casey
 
@@ -9,7 +9,7 @@
     (at your option) any later version.
 */
 /**
-Digoo PIR / Contact Sensor.
+Digoo PIR / Contact Sensor / Remote FOB.
 
 Tested with:
 - Digoo Hosa PIR
@@ -39,6 +39,7 @@ static int digoo_callback(r_device *decoder, bitbuffer_t *bitbuffer)
     int id;
     int cmd;
     char *cmd_str;
+    char *btn_str;
 
     int r = bitbuffer_find_repeated_row(bitbuffer, 1, 25);
     if (r < 0)
@@ -48,18 +49,38 @@ static int digoo_callback(r_device *decoder, bitbuffer_t *bitbuffer)
         return DECODE_ABORT_LENGTH;
     b = bitbuffer->bb[r];
 
+    // No need to decode/extract values for simple test
+    if ( !b[0] && !b[1] && !b[2] ) {
+        if (decoder->verbose > 1) {
+            fprintf(stderr, "%s: DECODE_FAIL_SANITY data all 0x00\n", __func__);
+        }
+        return DECODE_FAIL_SANITY;
+    }
+    
+    // invert bits, short pulse is 0, long pulse is 1
+    b[0] = ~b[0];
+    b[1] = ~b[1];
+    b[2] = ~b[2];
+
     id = (b[0] << 12) | (b[1] << 4) | (b[2] >> 4);
     cmd = b[2] & 0x0F;
     switch (cmd) {
-        case 0xa: cmd_str = "motion"; break;
-        case 0x9: cmd_str = "open"; break;
-        case 0xc: cmd_str = "open"; break;
-        case 0x6: cmd_str = "close"; break;
-        case 0xe: cmd_str = "locked"; break;
-        case 0xd: cmd_str = "unlocked"; break;
-        case 0xb: cmd_str = "home"; break;
-        case 0x7: cmd_str = "sos"; break;
+        case 0x5: cmd_str = "motion"; break;
+        case 0x6: cmd_str = "open"; break;
+        case 0x3: cmd_str = "open"; break;
+        case 0x9: cmd_str = "close"; break;
+        case 0x1: cmd_str = "locked"; break;
+        case 0x2: cmd_str = "unlocked"; break;
+        case 0x4: cmd_str = "home"; break;
+        case 0x8: cmd_str = "sos"; break;
         default:  cmd_str = "unknown"; break;
+    }
+    switch (cmd) {
+        case 0x1: btn_str = "lock"; break;
+        case 0x2: btn_str = "unlock"; break;
+        case 0x4: btn_str = "home"; break;
+        case 0x8: btn_str = "sos"; break;
+        default:  btn_str = "unknown"; break;
     }
 
     if (!cmd_str)
@@ -70,14 +91,11 @@ static int digoo_callback(r_device *decoder, bitbuffer_t *bitbuffer)
             "model",        "",                 DATA_STRING, "Digoo-Security",
             "id",           "ID (20bit)",       DATA_FORMAT, "0x%x", DATA_INT, id,
             "cmd",          "Command (4bit)",   DATA_FORMAT, "0x%x", DATA_INT, cmd,
-            "motion",       "",                 DATA_COND, cmd == 0xa, DATA_INT, 1,
-            "opened",       "",                 DATA_COND, cmd == 0x9, DATA_INT, 1,
-            "opened",       "",                 DATA_COND, cmd == 0xc, DATA_INT, 1,
-            "opened",       "",                 DATA_COND, cmd == 0x6, DATA_INT, 0,
-            "lock",         "",                 DATA_COND, cmd == 0xe, DATA_INT, 1,
-            "unlock",       "",                 DATA_COND, cmd == 0xd, DATA_INT, 1,
-            "home",         "",                 DATA_COND, cmd == 0xb, DATA_INT, 1,
-            "sos",          "",                 DATA_COND, cmd == 0x7, DATA_INT, 1,
+            "motion",       "",                 DATA_COND, cmd == 0x5, DATA_INT, 1,
+            "opened",       "",                 DATA_COND, cmd == 0x6, DATA_INT, 1,
+            "opened",       "",                 DATA_COND, cmd == 0x3, DATA_INT, 1,
+            "opened",       "",                 DATA_COND, cmd == 0x9, DATA_INT, 0,
+            "button",       "",                 DATA_COND, cmd == 0x8 || cmd == 0x4 || cmd == 0x2 || cmd == 0x1, DATA_STRING, btn_str,
             "state",        "State",            DATA_STRING, cmd_str,
             NULL);
     /* clang-format on */
@@ -92,16 +110,13 @@ static char *output_fields[] = {
         "cmd",
         "motion",
         "opened",
-        "lock",
-        "unlock",
-        "home",
-        "sos",
+        "button",
         "state",
         NULL,
 };
 
 r_device digoo = {
-        .name        = "Digoo PIR / Contact Sensor",
+        .name        = "Digoo PIR / Contact Sensor / Remote FOB",
         .modulation  = OOK_PULSE_PWM,
         .short_width = 400,
         .long_width  = 1200,
