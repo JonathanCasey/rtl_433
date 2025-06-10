@@ -31,7 +31,7 @@ Data layout:
              ^^     unknown?
                 ^^  channel (but maybe also other encoded data: 9F: CH1; B1: CH2; B7: CH3;)
                    ^^ ^^ unknown? (second byte changes between 00 and 02)
-                         ^^ temperature (degrees)
+                         ^^ temperature (degrees, 2's complement)
                             ^^ humidity (percentage)
                                ^^ unknown?
                                   ^^    Checksum, simple 4-bit addition over 20 nibbles (reflected)
@@ -51,8 +51,7 @@ static int rainpoint_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     if (bitbuffer->num_rows != 1
             || bitbuffer->bits_per_row[0] < 232 // 24 MC bits + some preamble
             || bitbuffer->bits_per_row[0] > 3000) {
-        if (decoder->verbose > 1)
-            fprintf(stderr, "%s: bit_per_row %u out of range\n", __func__, bitbuffer->bits_per_row[0]);
+        decoder_logf(decoder, 2, __func__, "bit_per_row %u out of range", bitbuffer->bits_per_row[0]);
         return DECODE_ABORT_EARLY; // Unrecognized data
     }
 
@@ -64,26 +63,22 @@ static int rainpoint_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     }
     start_pos += sizeof (preamble_pattern) * 8 - 2; // keep initial data bit
 
-    bitbuffer_t msg;
+    bitbuffer_t msg = {0};
     unsigned len = bitbuffer_manchester_decode(bitbuffer, 0, start_pos, &msg, 12 * 8);
     if (len - start_pos != 12 * 2 * 8) {
-        if (decoder->verbose > 1)
-            fprintf(stderr, "%s: Manchester decode failed, got %u bits\n", __func__, len - start_pos);
+        decoder_logf(decoder, 2, __func__, "Manchester decode failed, got %u bits", len - start_pos);
         return DECODE_ABORT_LENGTH;
     }
     bitbuffer_invert(&msg);
 
     uint8_t *b = msg.bb[0];
     reflect_bytes(b, 12);
-    if (decoder->verbose > 1) {
-        bitrow_printf(b, 12 * 8, "%s: ", __func__);
-    }
+    decoder_log_bitrow(decoder, 2, __func__, b, 12 * 8, "");
 
     // Checksum, add nibbles with carry
     int sum = add_nibbles(b, 10);
     if ((sum & 0xff) != b[10]) {
-        if (decoder->verbose > 1)
-            fprintf(stderr, "%s: Checksum failed %04x vs %04x\n", __func__, b[10], sum);
+        decoder_logf(decoder, 2, __func__, "Checksum failed %04x vs %04x", b[10], sum);
         return DECODE_FAIL_MIC;
     }
 
@@ -91,7 +86,7 @@ static int rainpoint_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     int id       = (b[2] << 8) | b[3]; // just a guess
     int flags    = (b[4]);             // just a guess
     int status   = (b[5] << 8) | b[6]; // just a guess
-    float temp_c = b[7];
+    float temp_c = (int8_t)b[7];
     int moisture = b[8];
     int chan     = 0; // 9f: CH1, b1: CH2, b7: CH3
     //int batt     = 0;
@@ -122,7 +117,7 @@ static int rainpoint_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     return 1;
 }
 
-static char *output_fields[] = {
+static char const *const output_fields[] = {
         "model",
         "id",
         "channel",
@@ -136,9 +131,9 @@ static char *output_fields[] = {
         NULL,
 };
 
-r_device rainpoint = {
+r_device const rainpoint = {
         .name        = "RainPoint soil temperature and moisture sensor",
-        .modulation  = OOK_PULSE_PCM_RZ,
+        .modulation  = OOK_PULSE_PCM,
         .short_width = 500,
         .long_width  = 500,
         .reset_limit = 1500,

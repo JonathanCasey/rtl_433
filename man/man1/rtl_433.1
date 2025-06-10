@@ -37,6 +37,10 @@ PlutoSDR, HackRF One (using SoapySDR drivers), as well as SoapyRemote.
 A summary of options is included below.
 Detailed information on some options follows.
 .\" body
+
+
+  A "rtl_433.conf" file is searched in "./", XDG_CONFIG_HOME e.g. "$HOME/.config/rtl_433/",
+  SYSCONFDIR e.g. "/usr/local/etc/rtl_433/", then command line args will be parsed in order.
 .SS "General options"
 .TP
 [ \fB\-V\fI\fP ]
@@ -44,7 +48,7 @@ Output the version string and exit
 .TP
 [ \fB\-v\fI\fP ]
 Increase verbosity (can be used multiple times).
-       \-v : verbose, \-vv : verbose decoders, \-vvv : debug decoders, \-vvvv : trace decoding).
+       \-v : verbose notice, \-vv : verbose info, \-vvv : debug, \-vvvv : trace.
 .TP
 [ \fB\-c\fI <path>\fP ]
 Read config options from a file
@@ -54,8 +58,9 @@ Read config options from a file
 [\-g <gain> | help] (default: auto)
 .TP
 [ \fB\-t\fI <settings>\fP ]
-apply a list of keyword=value settings for SoapySDR devices
-       e.g. \-t "antenna=A,bandwidth=4.5M,rfnotch_ctrl=false"
+apply a list of keyword=value settings to the SDR device
+       e.g. for SoapySDR \-t "antenna=A,bandwidth=4.5M,rfnotch_ctrl=false"
+       for RTL\-SDR use "direct_samp[=1]", "offset_tune[=1]", "digital_agc[=1]", "biastee[=1]"
 .TP
 [ \fB\-f\fI <frequency>\fP ]
 Receive frequency(s) (default: 433920000 Hz)
@@ -63,19 +68,19 @@ Receive frequency(s) (default: 433920000 Hz)
 [ \fB\-H\fI <seconds>\fP ]
 Hop interval for polling of multiple frequencies (default: 600 seconds)
 .TP
-[ \fB\-p\fI <ppm_error\fP ]
+[ \fB\-p\fI <ppm_error>\fP ]
 Correct rtl\-sdr tuner frequency offset error (default: 0)
 .TP
 [ \fB\-s\fI <sample rate>\fP ]
 Set sample rate (default: 250000 Hz)
+.TP
+[ \fB\-D\fI quit | restart | pause | manual\fP ]
+Input device run mode options (default: quit).
 .SS "Demodulator options"
 .TP
 [ \fB\-R\fI <device> | help\fP ]
 Enable only the specified device decoding protocol (can be used multiple times)
        Specify a negative number to disable a device decoding protocol (can be used multiple times)
-.TP
-[ \fB\-G\fI\fP ]
-Enable blacklisted device decoding protocols, for testing only.
 .TP
 [ \fB\-X\fI <spec> | help\fP ]
 Add a general purpose decoder (prepend \-R 0 to disable all decoders)
@@ -102,9 +107,6 @@ Skip frames below estimated noise level to reduce cpu load.
 Choose amplitude or magnitude level estimator.
 .SS "Analyze/Debug options"
 .TP
-[ \fB\-a\fI\fP ]
-Analyze mode. Print a textual description of the signal.
-.TP
 [ \fB\-A\fI\fP ]
 Pulse Analyzer. Enable pulse analysis and decode attempt.
        Disable all decoders with \-R 0 if you want analyzer output only.
@@ -127,12 +129,12 @@ Save data stream to output file (a '\-' dumps samples to stdout)
 Save data stream to output file, overwrite existing file
 .SS "Data output options"
 .TP
-[ \fB\-F\fI kv | json | csv | mqtt | influx | syslog | null | help\fP ]
+[ \fB\-F\fI log | kv | json | csv | mqtt | influx | syslog | trigger | rtl_tcp | http | null | help\fP ]
 Produce decoded output in given format.
        Append output to file with :<filename> (e.g. \-F csv:log.csv), defaults to stdout.
        Specify host/port for syslog with e.g. \-F syslog:127.0.0.1:1514
 .TP
-[ \fB\-M\fI time[:<options>] | protocol | level | noise[:secs] | stats | bits | help\fP ]
+[ \fB\-M\fI time[:<options>] | protocol | level | noise[:<secs>] | stats | bits | help\fP ]
 Add various meta data to each output.
 .TP
 [ \fB\-K\fI FILE | PATH | <tag> | <key>=<tag>\fP ]
@@ -225,6 +227,9 @@ gap=<gap> (or: g=<gap>)
 .RS
 tolerance=<tolerance> (or: t=<tolerance>)
 .RE
+.RS
+priority=<n> : run decoder only as fallback
+.RE
 where:
 <name> can be any descriptive name tag you need in the output
 <modulation> is one of:
@@ -232,7 +237,10 @@ where:
 OOK_MC_ZEROBIT :  Manchester Code with fixed leading zero bit
 .RE
 .RS
-OOK_PCM :         Pulse Code Modulation (RZ or NRZ)
+OOK_PCM :         Non Return to Zero coding (Pulse Code)
+.RE
+.RS
+OOK_RZ :          Return to Zero coding (Pulse Code)
 .RE
 .RS
 OOK_PPM :         Pulse Position Modulation
@@ -263,7 +271,7 @@ FSK_MC_ZEROBIT :  Manchester Code with fixed leading zero bit
 .RE
 <short>, <long>, <sync> are nominal modulation timings in us,
 <reset>, <gap>, <tolerance> are maximum modulation timings in us:
-PCM     short: Nominal width of pulse [us]
+PCM/RZ  short: Nominal width of pulse [us]
          long: Nominal width of bit period [us]
 PPM     short: Nominal width of '0' gap [us]
          long: Nominal width of '1' gap [us]
@@ -293,6 +301,12 @@ invert : invert all bits
 reflect : reflect each byte (MSB first to MSB last)
 .RE
 .RS
+decode_uart : UART 8n1 (10\-to\-8) decode
+.RE
+.RS
+decode_dm : Differential Manchester decode
+.RE
+.RS
 match=<bits> : only match if the <bits> are found
 .RE
 .RS
@@ -312,37 +326,52 @@ countonly : suppress detailed row output
 E.g. \-X "n=doorbell,m=OOK_PWM,s=400,l=800,r=7000,g=1000,match={24}0xa9878c,repeats>=3"
 .SS "Output format option"
 .TP
-[ \fB\-F\fI kv|json|csv|mqtt|influx|syslog|null\fP ]
+[ \fB\-F\fI log|kv|json|csv|mqtt|influx|syslog|trigger|rtl_tcp|http|null\fP ]
 Produce decoded output in given format.
 .RS
-Without this option the default is KV output. Use "\-F null" to remove the default.
+Without this option the default is LOG and KV output. Use "\-F null" to remove the default.
 .RE
 .RS
 Append output to file with :<filename> (e.g. \-F csv:log.csv), defaults to stdout.
 .RE
+.TP
+[ \fB\-F\fI mqtt[:[//]host[:port][,<options>]\fP ]
+(default: localhost:1883)
 .RS
 Specify MQTT server with e.g. \-F mqtt://localhost:1883
+.RE
+.RS
+Default user and password are read from MQTT_USERNAME and MQTT_PASSWORD env vars.
 .RE
 .RS
 Add MQTT options with e.g. \-F "mqtt://host:1883,opt=arg"
 .RE
 .RS
-MQTT options are: user=foo, pass=bar, retain[=0|1], qos=N, <format>[=topic]
+MQTT options are: user=foo, pass=bar, retain[=0|1], <format>[=topic]
 .RE
 .RS
 Supported MQTT formats: (default is all)
 .RE
 .RS
-  events: posts JSON event data
+  availability: posts availability (online/offline)
 .RE
 .RS
-  states: posts JSON state data
+  events: posts JSON event data, default "<base>/events"
 .RE
 .RS
-  devices: posts device and sensor info in nested topics
+  states: posts JSON state data, default "<base>/states"
 .RE
 .RS
-The topic string will expand keys like [/model]
+  devices: posts device and sensor info in nested topics,
+.RE
+.RS
+           default "<base>/devices[/type][/model][/subtype][/channel][/id]"
+.RE
+.RS
+A base topic can be set with base=<topic>, default is "rtl_433/HOSTNAME".
+.RE
+.RS
+Any topic string overrides the base topic and will expand keys like [/model]
 .RE
 .RS
 E.g. \-F "mqtt://localhost:1883,user=USERNAME,pass=PASSWORD,retain=0,devices=rtl_433[/id]"
@@ -353,6 +382,8 @@ With MQTT each rtl_433 instance needs a distinct driver selection. The MQTT Clie
 .RS
 If you use multiple RTL\-SDR, perhaps set a serial and select by that (helps not to get the wrong antenna).
 .RE
+.TP
+[ \fB\-F\fI influx[:[//]host[:port][/<path and options>]\fP ]
 .RS
 Specify InfluxDB 2.0 server with e.g. \-F "influx://localhost:9999/api/v2/write?org=<org>&bucket=<bucket>,token=<authtoken>"
 .RE
@@ -362,8 +393,28 @@ Specify InfluxDB 1.x server with e.g. \-F "influx://localhost:8086/write?db=<db>
 .RS
   Additional parameter \-M time:unix:usec:utc for correct timestamps in InfluxDB recommended
 .RE
+.TP
+[ \fB\-F\fI syslog[:[//]host[:port\fP ]
+(default: localhost:514)
 .RS
 Specify host/port for syslog with e.g. \-F syslog:127.0.0.1:1514
+.RE
+.TP
+[ \fB\-F\fI trigger:/path/to/file\fP ]
+.RS
+Add an output that writes a "1" to the path for each event, use with a e.g. a GPIO
+.RE
+.TP
+[ \fB\-F\fI rtl_tcp[:[//]bind[:port]\fP ]
+(default: localhost:1234)
+.RS
+Add a rtl_tcp pass\-through server
+.RE
+.TP
+[ \fB\-F\fI http[:[//]bind[:port]\fP ]
+(default: 0.0.0.0:8433)
+.RS
+Add a HTTP API server, a UI is at e.g. http://localhost:8433/
 .RE
 .SS "Meta information option"
 .TP
@@ -376,7 +427,7 @@ Use "time" to add current date and time meta data (preset for live inputs).
 Use "time:rel" to add sample position meta data (preset for read\-file and stdin).
 .RE
 .RS
-Use "time:unix" to show the seconds since unix epoch as time meta data.
+Use "time:unix" to show the seconds since unix epoch as time meta data. This is always UTC.
 .RE
 .RS
 Use "time:iso" to show the time with ISO\-8601 format (YYYY\-MM\-DD"T"hh:mm:ss).
@@ -397,7 +448,10 @@ Use "time:utc" to output time in UTC.
 	(this may also be accomplished by invocation with TZ environment variable set).
 .RE
 .RS
-	"usec" and "utc" can be combined with other options, eg. "time:unix:utc:usec".
+	"usec" and "utc" can be combined with other options, eg. "time:iso:utc" or "time:unix:usec".
+.RE
+.RS
+Use "replay[:N]" to replay file inputs at (N\-times) realtime.
 .RE
 .RS
 Use "protocol" / "noprotocol" to output the decoder protocol number meta data.
@@ -406,7 +460,7 @@ Use "protocol" / "noprotocol" to output the decoder protocol number meta data.
 Use "level" to add Modulation, Frequency, RSSI, SNR, and Noise meta data.
 .RE
 .RS
-Use "noise[:secs]" to report estimated noise level at intervals (default: 10 seconds).
+Use "noise[:<secs>]" to report estimated noise level at intervals (default: 10 seconds).
 .RE
 .RS
 Use "stats[:[<level>][:<interval>]]" to report statistics (default: 600 seconds).

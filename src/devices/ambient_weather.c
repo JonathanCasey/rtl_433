@@ -11,12 +11,32 @@
 */
 
 /**
-Ambient Weather F007TH Thermo-Hygrometer.
+Decode Ambient Weather F007TH, F012TH, TF 30.3208.02, SwitchDoc F016TH.
 
-Also: TFA senders 30.3208.02 from the TFA "Klima-Monitor" 30.3054,
-also: SwitchDoc Labs F016TH.
+Devices supported:
 
-The check is an LFSR Digest-8, gen 0x98, key 0x3e, init 0x64
+- Ambient Weather F007TH Thermo-Hygrometer.
+- Ambient Weather F012TH Indoor/Display Thermo-Hygrometer.
+- TFA senders 30.3208.02 from the TFA "Klima-Monitor" 30.3054,
+- SwitchDoc Labs F016TH.
+- Suomen Lämpömittari 7411
+
+This decoder handles the 433mhz/868mhz thermo-hygrometers.
+The 915mhz (WH*) family of devices use different modulation/encoding.
+
+
+Byte 0   Byte 1   Byte 2   Byte 3   Byte 4   Byte 5
+xxxxMMMM IIIIIIII BCCCTTTT TTTTTTTT HHHHHHHH MMMMMMMM
+
+- x: Unknown 0x04 on F007TH/F012TH
+- M: Model Number?, 0x05 on F007TH/F012TH/SwitchDocLabs F016TH
+- I: ID byte (8 bits), volatie, changes at power up,
+- B: Battery Low
+- C: Channel (3 bits 1-8) - F007TH set by Dip switch, F012TH soft setting
+- T: Temperature 12 bits - Fahrenheit * 10 + 400
+- H: Humidity (8 bits)
+- M: Message integrity check LFSR Digest-8, gen 0x98, key 0x3e, init 0x64
+
 */
 
 #include "decoder.h"
@@ -24,40 +44,64 @@ The check is an LFSR Digest-8, gen 0x98, key 0x3e, init 0x64
 static int ambient_weather_decode(r_device *decoder, bitbuffer_t *bitbuffer, unsigned row, unsigned bitpos)
 {
     uint8_t b[6];
-    int deviceID;
-    int isBatteryLow;
-    int channel;
-    float temperature;
-    int humidity;
-    data_t *data;
 
-    bitbuffer_extract_bytes(bitbuffer, row, bitpos, b, 6*8);
+    bitbuffer_extract_bytes(bitbuffer, row, bitpos, b, 6 * 8);
 
-    uint8_t expected = b[5];
+    uint8_t expected   = b[5];
     uint8_t calculated = lfsr_digest8(b, 5, 0x98, 0x3e) ^ 0x64;
 
     if (expected != calculated) {
-        if (decoder->verbose) {
-            bitrow_printf(b, 48, "%s: Checksum error, expected: %02x calculated: %02x\n", __func__, expected, calculated);
-        }
+        decoder_logf_bitrow(decoder, 1, __func__, b, 48, "Checksum error, expected: %02x calculated: %02x", expected, calculated);
         return DECODE_FAIL_MIC;
     }
 
     // int model_number = b[0] & 0x0F; // fixed 0x05, at least for "SwitchDoc Labs F016TH"
-    deviceID = b[1];
-    isBatteryLow = (b[2] & 0x80) != 0; // if not zero, battery is low
-    channel = ((b[2] & 0x70) >> 4) + 1;
-    int temp_f = ((b[2] & 0x0f) << 8) | b[3];
-    temperature = (temp_f - 400) * 0.1f;
-    humidity = b[4];
+    int deviceID    = b[1];
+    int battery_low = (b[2] & 0x80) != 0; // if not zero, battery is low
+    int channel     = ((b[2] & 0x70) >> 4) + 1;
+    int temp_raw    = ((b[2] & 0x0f) << 8) | b[3];
+    float temp_f    = (temp_raw - 400) * 0.1f;
+    int humidity    = b[4];
+
+    /*
+    Sanity checks to reduce false positives and other bad data
+
+    Packets with Bad data often pass the MIC check.
+
+    - humidity > 100 (such as 255) and
+    - temperatures >= 344 F (0xf00 to 0xfff values)
+
+    Specs in the F007TH and F012TH manuals state the range is:
+
+    - Temperature: -40 to 140 F (7411 model up 150 C / 302 F)
+    - Humidity: 10 to 99%
+
+    @todo - sanity check b[0] "model number"
+
+    - 0x45 - F007TH and F012TH
+    - 0x?5 - SwitchDocLabs F016TH temperature sensor (based on comment b[0] & 0x0f == 5)
+    - ? - TFA 30.3208.02
+
+    */
+
+    if (humidity > 100) {
+        decoder_logf_bitrow(decoder, 1, __func__, b, 48, "Humidity failed sanity check 0x%02x", humidity);
+        return DECODE_FAIL_SANITY;
+    }
+
+    if (temp_f < -40.0f || temp_f >= 344.0f) {
+        decoder_logf_bitrow(decoder, 1, __func__, b, 48, "Temperature failed sanity check 0x%03x", temp_raw);
+        return DECODE_FAIL_SANITY;
+    }
+
 
     /* clang-format off */
-    data = data_make(
+    data_t *data = data_make(
             "model",          "",             DATA_STRING, "Ambientweather-F007TH",
             "id",             "House Code",   DATA_INT,    deviceID,
             "channel",        "Channel",      DATA_INT,    channel,
-            "battery_ok",     "Battery",      DATA_INT,    !isBatteryLow,
-            "temperature_F",  "Temperature",  DATA_FORMAT, "%.1f F", DATA_DOUBLE, temperature,
+            "battery_ok",     "Battery",      DATA_INT,    !battery_low,
+            "temperature_F",  "Temperature",  DATA_FORMAT, "%.1f F", DATA_DOUBLE, temp_f,
             "humidity",       "Humidity",     DATA_FORMAT, "%u %%", DATA_INT, humidity,
             "mic",            "Integrity",    DATA_STRING, "CRC",
             NULL);
@@ -86,19 +130,19 @@ static int ambient_weather_callback(r_device *decoder, bitbuffer_t *bitbuffer)
     for (row = 0; row < bitbuffer->num_rows; ++row) {
         bitpos = 0;
         // Find a preamble with enough bits after it that it could be a complete packet
-        while ((bitpos = bitbuffer_search(bitbuffer, row, bitpos,
-                (const uint8_t *)&preamble_pattern, 12)) + 8+6*8 <=
+        while ((bitpos = bitbuffer_search(bitbuffer, row, bitpos, preamble_pattern, 12)) + 8 + 6 * 8 <=
                 bitbuffer->bits_per_row[row]) {
             ret = ambient_weather_decode(decoder, bitbuffer, row, bitpos + 8);
-            if (ret > 0) return ret; // for now, break after first successful message
+            if (ret > 0)
+                return ret; // for now, break after first successful message
             bitpos += 16;
         }
         bitpos = 0;
-        while ((bitpos = bitbuffer_search(bitbuffer, row, bitpos,
-                (const uint8_t *)&preamble_inverted, 12)) + 8+6*8 <=
+        while ((bitpos = bitbuffer_search(bitbuffer, row, bitpos, preamble_inverted, 12)) + 8 + 6 * 8 <=
                 bitbuffer->bits_per_row[row]) {
             ret = ambient_weather_decode(decoder, bitbuffer, row, bitpos + 8);
-            if (ret > 0) return ret; // for now, break after first successful message
+            if (ret > 0)
+                return ret; // for now, break after first successful message
             bitpos += 15;
         }
     }
@@ -108,7 +152,7 @@ static int ambient_weather_callback(r_device *decoder, bitbuffer_t *bitbuffer)
     return ret;
 }
 
-static char *output_fields[] = {
+static char const *const output_fields[] = {
         "model",
         "id",
         "channel",
@@ -119,13 +163,12 @@ static char *output_fields[] = {
         NULL,
 };
 
-r_device ambient_weather = {
+r_device const ambient_weather = {
         .name        = "Ambient Weather F007TH, TFA 30.3208.02, SwitchDocLabs F016TH temperature sensor",
         .modulation  = OOK_PULSE_MANCHESTER_ZEROBIT,
         .short_width = 500,
         .long_width  = 0, // not used
         .reset_limit = 2400,
         .decode_fn   = &ambient_weather_callback,
-        .disabled    = 0,
         .fields      = output_fields,
 };

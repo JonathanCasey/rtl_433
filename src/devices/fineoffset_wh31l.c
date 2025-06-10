@@ -2,7 +2,7 @@
     Ambient Weather (Fine Offset) WH31L protocol.
 
     Copyright (C) 2021 Christian W. Zuckschwerdt <zany@triq.net>
-    based on protocol analysis by @MksRasp.
+    based on protocol analysis by \@MksRasp.
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -95,8 +95,7 @@ static int fineoffset_wh31l_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     // No preamble detected
     if (start_pos == bitbuffer->bits_per_row[row])
         return DECODE_ABORT_EARLY;
-    if (decoder->verbose)
-        fprintf(stderr, "%s: WH31L detected, buffer is %d bits length\n", __func__, bitbuffer->bits_per_row[row]);
+    decoder_logf(decoder, 1, __func__, "WH31L detected, buffer is %d bits length", bitbuffer->bits_per_row[row]);
 
     // Remove preamble and sync word, keep whole payload
     uint8_t b[9];
@@ -110,14 +109,12 @@ static int fineoffset_wh31l_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     // Validate checksums
     uint8_t c_crc = crc8(b, 8, 0x31, 0x00);
     if (c_crc) {
-        if (decoder->verbose)
-            fprintf(stderr, "%s: bad CRC\n", __func__);
+        decoder_log(decoder, 1, __func__, "bad CRC");
         return DECODE_FAIL_MIC;
     }
     uint8_t c_sum = add_bytes(b, 8) - b[8];
     if (c_sum) {
-        if (decoder->verbose)
-            fprintf(stderr, "%s: bad SUM\n", __func__);
+        decoder_log(decoder, 1, __func__, "bad SUM");
         return DECODE_FAIL_MIC;
     }
 
@@ -128,7 +125,7 @@ static int fineoffset_wh31l_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     int s_dist     = (b[5] & 0x3f);
     int s_count    = (b[6]);
 
-    char *state_str;
+    char const *state_str;
     if (state == 0)
         state_str = "reset";
     else if (state == 1)
@@ -143,11 +140,11 @@ static int fineoffset_wh31l_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     /* clang-format off */
     data_t *data = data_make(
             "model",            "",                 DATA_STRING, "FineOffset-WH31L",
-            "id" ,              "",                 DATA_INT,    id,
-            "battery_ok",       "Battery",          DATA_DOUBLE, battery_ok * 0.5f,
+            "id",               "",                 DATA_INT,    id,
+            "battery_ok",       "Battery level",    DATA_DOUBLE, battery_ok * 0.5f,
             "state",            "State",            DATA_STRING, state_str,
             "flags",            "Flags",            DATA_FORMAT, "%04x", DATA_INT,    flags,
-            "storm_dist_km",    "Storm Dist",       DATA_COND, s_dist != 63, DATA_FORMAT, "%d km", DATA_INT,    s_dist,
+            "storm_dist_km",    "Storm Distance",   DATA_COND, s_dist != 63, DATA_FORMAT, "%d km", DATA_INT,    s_dist,
             "strike_count",     "Strike Count",     DATA_INT,    s_count,
             "mic",              "Integrity",        DATA_STRING, "CRC",
             NULL);
@@ -157,7 +154,7 @@ static int fineoffset_wh31l_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     return 1;
 }
 
-static char *output_fields[] = {
+static char const *const output_fields[] = {
         "model",
         "id",
         "battery_ok",
@@ -169,7 +166,7 @@ static char *output_fields[] = {
         NULL,
 };
 
-r_device fineoffset_wh31l = {
+r_device const fineoffset_wh31l = {
         .name        = "Ambient Weather WH31L (FineOffset WH57) Lightning-Strike sensor",
         .modulation  = FSK_PULSE_PCM,
         .short_width = 56,

@@ -31,8 +31,6 @@ Actually 37 bits for all but last transmission which is 36 bits.
 
 #include "decoder.h"
 
-extern int alecto_checksum(uint8_t *b);
-
 static int springfield_decode(r_device *decoder, bitbuffer_t *bitbuffer)
 {
     int ret = 0;
@@ -55,10 +53,6 @@ static int springfield_decode(r_device *decoder, bitbuffer_t *bitbuffer)
         if (chk != 0)
             continue; // DECODE_FAIL_MIC
 
-        // Check for Alecto collision, if the checksum is correct it's not Springfield-Soil
-        if (alecto_checksum(b))
-            continue; // DECODE_FAIL_SANITY
-
         int sid      = (b[0]);
         int battery  = (b[1] >> 7) & 1;
         int button   = (b[1] >> 6) & 1;
@@ -70,8 +64,7 @@ static int springfield_decode(r_device *decoder, bitbuffer_t *bitbuffer)
 
         // reduce false positives by checking specified sensor range, this isn't great...
         if (temp_c < -30 || temp_c > 70) {
-            if (decoder->verbose > 1)
-                fprintf(stderr, "%s: temperature sanity check failed: %.1f C\n", __func__, temp_c);
+            decoder_logf(decoder, 2, __func__, "temperature sanity check failed: %.1f C", temp_c);
             return DECODE_FAIL_SANITY;
         }
 
@@ -96,7 +89,7 @@ static int springfield_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     return ret;
 }
 
-static char *output_fields[] = {
+static char const *const output_fields[] = {
         "model",
         "id",
         "channel",
@@ -109,7 +102,7 @@ static char *output_fields[] = {
         NULL,
 };
 
-r_device springfield = {
+r_device const springfield = {
         .name        = "Springfield Temperature and Soil Moisture",
         .modulation  = OOK_PULSE_PPM,
         .short_width = 2000,
@@ -117,6 +110,6 @@ r_device springfield = {
         .gap_limit   = 5000,
         .reset_limit = 9200,
         .decode_fn   = &springfield_decode,
-        .disabled    = 0,
-        .fields      = output_fields
+        .priority    = 10, // Alecto collision, if Alecto checksum is correct it's not Springfield-Soil
+        .fields      = output_fields,
 };

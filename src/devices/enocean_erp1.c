@@ -52,8 +52,8 @@ static int enocean_erp1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
 
     bitbuffer_invert(bitbuffer);
 
-    uint8_t preamble[2] = { 0x55, 0x20 };
-    unsigned start = bitbuffer_search(bitbuffer, 0, 0, preamble, 11);
+    uint8_t preamble[2] = {0x55, 0x20};
+    unsigned start      = bitbuffer_search(bitbuffer, 0, 0, preamble, 11);
     if (start >= bitbuffer->bits_per_row[0])
         return DECODE_FAIL_SANITY;
 
@@ -62,7 +62,7 @@ static int enocean_erp1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     unsigned end = start + len;
 
     bitbuffer_t bytes = {0};
-    uint8_t more = 0x01;
+    uint8_t more      = 0x01;
     do {
         more = decode_8of12(bitbuffer->bb[0], pos, end, &bytes);
         pos += 12;
@@ -90,16 +90,16 @@ static int enocean_erp1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     return 1;
 }
 
-static char *output_fields[] = {
+static char const *const output_fields[] = {
         "model",
         "telegram",
         "mic",
         NULL,
 };
 
-r_device enocean_erp1 = {
+r_device const enocean_erp1 = {
         .name        = "EnOcean ERP1",
-        .modulation  = OOK_PULSE_PCM_RZ,
+        .modulation  = OOK_PULSE_PCM,
         .short_width = 8,
         .long_width  = 8,
         .sync_width  = 0,

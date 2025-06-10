@@ -16,6 +16,13 @@ Data layout (bits):
 - I: 8 bit a random id that is generated when the sensor starts
 
 S.a. http://www.osengr.org/WxShield/Downloads/OregonScientific-RF-Protocols-II.pdf
+
+
+The device "Bresser Thermo-/Hygro-Sensor Explore Scientific ST1005H" works
+with the same row length, but a completely different interpretation.
+As such, if the bits align both decoders can misdetect data from the
+other sensor as valid from their sensor with "plausable" but usually
+completely wrong values.
 */
 
 #include "decoder.h"
@@ -42,10 +49,8 @@ static int oregon_scientific_sl109h_callback(r_device *decoder, bitbuffer_t *bit
 
         // No need to decode/extract values for simple test
         // check id channel temperature humidity value not zero
-        if ( !msg[0] && !msg[1] && !msg[2] && !msg[3] ) {
-            if (decoder->verbose > 1) {
-                fprintf(stderr, "%s: DECODE_FAIL_SANITY data all 0x00\n", __func__);
-            }
+        if (!msg[0] && !msg[1] && !msg[2] && !msg[3]) {
+            decoder_log(decoder, 2, __func__, "DECODE_FAIL_SANITY data all 0x00");
             continue; // DECODE_FAIL_SANITY
         }
 
@@ -63,8 +68,7 @@ static int oregon_scientific_sl109h_callback(r_device *decoder, bitbuffer_t *bit
 
         sum = add_nibbles(b, 5) & 0xf;
         if (sum != chk) {
-            if (decoder->verbose > 1)
-                bitbuffer_printf(bitbuffer, "%s: Checksum error. Expected: %01x Calculated: %01x\n", __func__, chk, sum);
+            decoder_logf_bitbuffer(decoder, 2, __func__, bitbuffer, "Checksum error. Expected: %01x Calculated: %01x", chk, sum);
             continue; // DECODE_FAIL_MIC
         }
 
@@ -74,12 +78,11 @@ static int oregon_scientific_sl109h_callback(r_device *decoder, bitbuffer_t *bit
         humidity = 10 * (b[0] & 0x0f) + (b[1] >> 4);
 
         temp_raw = (int16_t)((b[1] & 0x0f) << 12) | (b[2] << 4); // uses sign-extend
-        temp_c = (temp_raw >> 4) * 0.1f;
+        temp_c   = (temp_raw >> 4) * 0.1f;
 
         // reduce false positives by checking specified sensor range, this isn't great...
         if (temp_c < -20 || temp_c > 60) {
-            if (decoder->verbose > 1)
-                fprintf(stderr, "%s: temperature sanity check failed: %.1f C\n", __func__, temp_c);
+            decoder_logf(decoder, 2, __func__, "temperature sanity check failed: %.1f C", temp_c);
             return DECODE_FAIL_SANITY;
         }
 
@@ -108,7 +111,7 @@ static int oregon_scientific_sl109h_callback(r_device *decoder, bitbuffer_t *bit
     return 0;
 }
 
-static char *output_fields[] = {
+static char const *const output_fields[] = {
         "model",
         "id",
         "channel",
@@ -119,7 +122,7 @@ static char *output_fields[] = {
         NULL,
 };
 
-r_device oregon_scientific_sl109h = {
+r_device const oregon_scientific_sl109h = {
         .name        = "Oregon Scientific SL109H Remote Thermal Hygro Sensor",
         .modulation  = OOK_PULSE_PPM,
         .short_width = 2000,
@@ -127,6 +130,5 @@ r_device oregon_scientific_sl109h = {
         .gap_limit   = 5000,
         .reset_limit = 10000, // packet gap is 8900
         .decode_fn   = &oregon_scientific_sl109h_callback,
-        .disabled    = 0,
         .fields      = output_fields,
 };

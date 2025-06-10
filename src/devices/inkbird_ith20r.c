@@ -14,6 +14,8 @@ Decoder for Inkbird ITH-20R.
 
 https://www.ink-bird.com/products-data-logger-ith20r.html
 
+Also: Inkbird IBS-P01R Pool Thermometer.
+
 The compact 3-in-1 multifunction outdoor sensor transmits the data on 433.92 MHz.
 The device uses FSK-PCM encoding,
 The device sends a transmission every ~80 sec.
@@ -28,7 +30,7 @@ Decoding borrowed from https://groups.google.com/forum/#!topic/rtl_433/oeExmwoBI
 - 0-2     D3910F      Always the same across devices, a device type?
 - 3       00          00 - normal work , 40 - unlink sensor (button pressed 5s), 80 - battery replaced
 - 4       01          Changes from 1 to 2 if external sensor present
-- 5-6     0301        Unknown (also seen 0201), sw version?
+- 5-6     0301        Unknown (also seen 0201), sw version? Seen 0x0001 on IBS-P01R.
 - 7       58          Battery % 0-100
 - 8-9     A221        Device id, always the same for a sensor but each sensor is different
 - 10-11   D600        Temperature in C * 10, little endian, so 0xD200 is 210, 21.0C or 69.8F
@@ -47,23 +49,21 @@ Decoder written by Dmitriy Kozyrev, 2020
 
 #include "decoder.h"
 
-static const uint8_t preamble_pattern[] = { 0xaa, 0xaa, 0xaa, 0x2d, 0xd4 };
-
 #define INKBIRD_ITH20R_CRC_POLY 0xA001  // reflected 0x8005
 #define INKBIRD_ITH20R_CRC_INIT 0x86F4  // reflected 0x2f61
 
 
 static int inkbird_ith20r_callback(r_device *decoder, bitbuffer_t *bitbuffer)
 {
+    uint8_t const preamble_pattern[] = {0xaa, 0xaa, 0xaa, 0x2d, 0xd4};
+
     data_t *data;
     uint8_t msg[19];
 
-    if ( (bitbuffer->num_rows != 1)
-         || (bitbuffer->bits_per_row[0] < 187)
-          /*|| (bitbuffer->bits_per_row[0] > 14563)*/ ) {
-        if (decoder->verbose > 1) {
-            fprintf(stderr, "%s bit_per_row %u out of range\n", __func__, bitbuffer->bits_per_row[0]);
-        }
+    if ((bitbuffer->num_rows != 1)
+            || (bitbuffer->bits_per_row[0] < 187)
+            /*|| (bitbuffer->bits_per_row[0] > 14563)*/) {
+        decoder_logf(decoder, 2, __func__, "bit_per_row %u out of range", bitbuffer->bits_per_row[0]);
         return DECODE_ABORT_LENGTH; // Unrecognized data
     }
 
@@ -77,15 +77,10 @@ static int inkbird_ith20r_callback(r_device *decoder, bitbuffer_t *bitbuffer)
     start_pos += sizeof (preamble_pattern) * 8;
     unsigned len = bitbuffer->bits_per_row[0] - start_pos;
 
-    if (decoder->verbose > 1) {
-        fprintf(stderr, "%s start_pos=%u\n", __func__, start_pos);
-        fprintf(stderr, "%s len=%u\n", __func__, len);
-    }
+    decoder_logf(decoder, 2, __func__, "start_pos=%u len=%u", start_pos, len);
 
     if (((len + 7) / 8) < sizeof (msg)) {
-        if (decoder->verbose) {
-            fprintf(stderr, "%s %u too short\n", __func__, len);
-        }
+        decoder_logf(decoder, 1, __func__, "%u too short", len);
         return DECODE_ABORT_LENGTH; // Message too short
     }
     // truncate any excessive bits
@@ -97,69 +92,60 @@ static int inkbird_ith20r_callback(r_device *decoder, bitbuffer_t *bitbuffer)
     uint16_t crc_calculated = crc16lsb(msg, 16, INKBIRD_ITH20R_CRC_POLY, INKBIRD_ITH20R_CRC_INIT);
     uint16_t crc_received = msg[17] << 8 | msg[16];
 
-    if (decoder->verbose > 1) {
-        fprintf(stderr, "%s CRC 0x%04X = 0x%04X\n", __func__, crc_calculated, crc_received);
-    }
+    decoder_logf(decoder, 2, __func__, "CRC 0x%04X = 0x%04X", crc_calculated, crc_received);
 
     if (crc_received != crc_calculated) {
-        if (decoder->verbose) {
-            fprintf(stderr, "%s CRC check failed (0x%04X != 0x%04X)\n", __func__, crc_calculated, crc_received);
-        }
+        decoder_logf(decoder, 1, __func__, "CRC check failed (0x%04X != 0x%04X)", crc_calculated, crc_received);
         return DECODE_FAIL_MIC;
     }
 
     uint32_t subtype = (msg[3] << 24 | msg[2] << 16 | msg[1] << 8 | msg[0]);
     int sensor_num = msg[4];
     uint16_t word56 = (msg[6] << 8 | msg[5]);
-    int battery = msg[7];
+    float battery_ok = msg[7] * 0.01f;
     uint16_t sensor_id = (msg[9] << 8 | msg[8]);
-    float temperature = (float)((int16_t)(msg[11] << 8 | msg[10])) / 10.0;
-    float temperature_ext = (float)((int16_t)(msg[13] << 8 | msg[12])) / 10.0;
-    float humidity = (float)(msg[15] << 8 | msg[14]) / 10.0;
+    float temperature = ((int16_t)(msg[11] << 8 | msg[10])) * 0.1f;
+    float temperature_ext = ((int16_t)(msg[13] << 8 | msg[12])) * 0.1f;
+    float humidity = (msg[15] << 8 | msg[14]) * 0.1f;
     uint8_t word18 = msg[18];
 
-    if (decoder->verbose) {
-        fprintf(stderr, "%s dword0-3= 0x%08X\n", __func__, subtype);
-        fprintf(stderr, "%s word5-6= 0x%04X\n", __func__, word56);
-        fprintf(stderr, "%s byte18= 0x%02X\n", __func__, word18);
-    }
+    decoder_logf(decoder, 1, __func__, "dword0-3= 0x%08X word5-6= 0x%04X byte18= 0x%02X", subtype, word56, word18);
 
+    /* clang-format off */
     data = data_make(
-            "model",            "",             DATA_STRING, "Inkbird ITH-20R",
+            "model",            "",             DATA_STRING, "Inkbird-ITH20R",
             "id",               "",             DATA_INT,    sensor_id,
-            "battery",          "Battery",      DATA_INT,    battery,
+            "battery_ok",       "Battery level",    DATA_DOUBLE, battery_ok,
             "sensor_num",       "",             DATA_INT,    sensor_num,
-            "mic",              "Integrity",    DATA_STRING, "CRC",
             "temperature_C",    "Temperature",  DATA_FORMAT, "%.1f C", DATA_DOUBLE, temperature,
-            "temperature2_C",   "Temperature2", DATA_FORMAT, "%.1f C", DATA_DOUBLE, temperature_ext,
+            "temperature_2_C",  "Temperature2", DATA_FORMAT, "%.1f C", DATA_DOUBLE, temperature_ext,
             "humidity",         "Humidity",     DATA_FORMAT, "%.1f %%", DATA_DOUBLE, humidity,
+            "mic",              "Integrity",    DATA_STRING, "CRC",
             NULL);
+    /* clang-format on */
 
     decoder_output_data(decoder, data);
-
     return 1;
 }
 
-static char *output_fields[] = {
-    "model",
-    "id",
-    "battery",
-    "sensor_num",
-    "mic",
-    "temperature_C",
-    "temperature2_C",
-    "humidity",
-    NULL
+static char const *const output_fields[] = {
+        "model",
+        "id",
+        "battery_ok",
+        "sensor_num",
+        "temperature_C",
+        "temperature_2_C",
+        "humidity",
+        "mic",
+        NULL,
 };
 
-r_device inkbird_ith20r = {
-    .name          = "Inkbird ITH-20R temperature humidity sensor",
-    .modulation    = FSK_PULSE_PCM,
-    .sync_width    = 0,     // No sync bit used
-    .short_width   = 100,   // Width of a '0' gap
-    .long_width    = 100,   // Width of a '1' gap
-    .reset_limit   = 4000,  // Maximum gap size before End Of Message [us]
-    .decode_fn     = &inkbird_ith20r_callback,
-    .disabled      = 0,
-    .fields        = output_fields,
+r_device const inkbird_ith20r = {
+        .name        = "Inkbird ITH-20R temperature humidity sensor",
+        .modulation  = FSK_PULSE_PCM,
+        .short_width = 100,  // Width of a '0' gap
+        .long_width  = 100,  // Width of a '1' gap
+        .reset_limit = 4000, // Maximum gap size before End Of Message [us]
+        .decode_fn   = &inkbird_ith20r_callback,
+        .fields      = output_fields,
 };

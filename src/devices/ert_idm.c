@@ -36,7 +36,7 @@ http://www.gridinsight.com/community/documentation/itron-ert-technology/
 
 // Least significant nibble of endpoint_type is equivalent to SCM's endpoint type field
 // id info from https://github.com/bemasher/rtlamr/wiki/Compatible-Meters
-static char *get_meter_type_name(uint8_t ERTType)
+static char const *get_meter_type_name(uint8_t ERTType)
 {
     switch (ERTType & 0x0f) {
     case 4:
@@ -120,8 +120,8 @@ static int ert_idm_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     uint16_t PacketCRC;
     // char  PacketCRC_str[8];
 
-    if (decoder->verbose && bitbuffer->bits_per_row[0] > 600) {
-        fprintf(stderr, "%s: rows=%hu, row0 len=%hu\n", __func__, bitbuffer->num_rows, bitbuffer->bits_per_row[0]);
+    if (bitbuffer->bits_per_row[0] > 600) {
+        decoder_logf(decoder, 1, __func__, "rows=%hu, row0 len=%hu", bitbuffer->num_rows, bitbuffer->bits_per_row[0]);
     }
 
     if (bitbuffer->bits_per_row[0] < IDM_PACKET_BITLEN) {
@@ -130,9 +130,7 @@ static int ert_idm_decode(r_device *decoder, bitbuffer_t *bitbuffer)
 
     sync_index = bitbuffer_search(bitbuffer, 0, 0, idm_frame_sync, 24);
 
-    if (decoder->verbose) {
-        fprintf(stderr, "%s: sync_index=%u\n", __func__, sync_index);
-    }
+    decoder_logf(decoder, 1, __func__, "sync_index=%u", sync_index);
 
     if (sync_index >= bitbuffer->bits_per_row[0]) {
         return DECODE_ABORT_EARLY;
@@ -144,9 +142,7 @@ static int ert_idm_decode(r_device *decoder, bitbuffer_t *bitbuffer)
 
     // bitbuffer_debug(bitbuffer);
     bitbuffer_extract_bytes(bitbuffer, 0, sync_index, b, IDM_PACKET_BITLEN);
-    if (decoder->verbose) {
-        bitrow_printf(b, IDM_PACKET_BITLEN, "%s bitrow_printf", __func__);
-    }
+    decoder_log_bitrow(decoder, 1, __func__, b, IDM_PACKET_BITLEN, "");
 
     // uint32_t t_16; // temp vars
     // uint32_t t_32;
@@ -194,8 +190,8 @@ static int ert_idm_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     http://davestech.blogspot.com/2008/02/itron-remote-read-electric-meter.html
     SCM1 Counter1 Meter has been inverted
     SCM1 Counter2 Meter has been removed
-    SCM2 Counter3 Meter detected a button–press demand reset
-    SCM2 Counter4 Meter has a low-battery/end–of–calendar warning
+    SCM2 Counter3 Meter detected a button-press demand reset
+    SCM2 Counter4 Meter has a low-battery/end-of-calendar warning
     SCM3 Counter5 Meter has an error or a warning that can affect billing
     SCM3 Counter6 Meter has a warning that may or may not require a site visit,
     */
@@ -203,10 +199,10 @@ static int ert_idm_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     strncpy(p, "0x", sizeof(TamperCounters_str));
     p += 2;
     for (int j = 0; j < 6; j++) {
-        p += sprintf(p, "%02X", b[13 + j]);
+        // GCC-14 is confused by sprintf()
+        p += snprintf(p, 3, "%02X", b[13 + j]);
     }
-    if (decoder->verbose > 1)
-        bitrow_printf(&b[13], 6 * 8, "%s TamperCounters_str   %s\t", __func__, TamperCounters_str);
+    decoder_logf_bitrow(decoder, 2, __func__, &b[13], 6 * 8, "TamperCounters_str   %s", TamperCounters_str);
 
     AsynchronousCounters = (b[19] << 8 | b[20]);
     // snprintf(AsynchronousCounters_str, sizeof(AsynchronousCounters_str), "0x%04X", AsynchronousCounters);
@@ -215,18 +211,16 @@ static int ert_idm_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     strncpy(p, "0x", sizeof(PowerOutageFlags_str));
     p += 2;
     for (int j = 0; j < 6; j++) {
-        p += sprintf(p, "%02X", b[21 + j]);
+        // GCC-14 is confused by sprintf()
+        p += snprintf(p, 3, "%02X", b[21 + j]);
     }
-    if (decoder->verbose > 1)
-        bitrow_printf(&b[21], 6 * 8, "%s PowerOutageFlags_str %s\t", __func__, PowerOutageFlags_str);
+    decoder_logf_bitrow(decoder, 2, __func__, &b[21], 6 * 8, "PowerOutageFlags_str %s", PowerOutageFlags_str);
 
     LastConsumptionCount = ((uint32_t)b[27] << 24) | (b[28] << 16) | (b[29] << 8) | (b[30]);
-    if (decoder->verbose)
-        bitrow_printf(&b[27], 32, "%s LastConsumptionCount %d\t", __func__, LastConsumptionCount);
+    decoder_logf_bitrow(decoder, 1, __func__, &b[27], 32, "LastConsumptionCount %d", LastConsumptionCount);
 
     // DifferentialConsumptionIntervals : 47 intervals of 9-bit unsigned integers
-    if (decoder->verbose > 1)
-        bitrow_printf(&b[31], 423, "%s DifferentialConsumptionIntervals", __func__);
+    decoder_log_bitrow(decoder, 2, __func__, &b[31], 423, "DifferentialConsumptionIntervals");
     unsigned pos = sync_index + (31 * 8);
     for (int j = 0; j < 47; j++) {
         uint8_t buffy[4] = {0};
@@ -235,12 +229,11 @@ static int ert_idm_decode(r_device *decoder, bitbuffer_t *bitbuffer)
         DifferentialConsumptionIntervals[j] = ((uint16_t)buffy[0] << 1) | (buffy[1] >> 7);
         pos += 9;
     }
-    if (decoder->verbose > 1) {
-        fprintf(stderr, "%s DifferentialConsumptionIntervals:\n\t", __func__);
+    if (decoder_verbose(decoder) > 1) {
+        decoder_log(decoder, 2, __func__, "DifferentialConsumptionIntervals");
         for (int j = 0; j < 47; j++) {
-            fprintf(stderr, "%d ", DifferentialConsumptionIntervals[j]);
+            decoder_logf(decoder, 2, __func__, "%d", DifferentialConsumptionIntervals[j]);
         }
-        fprintf(stderr, "\n");
     }
 
     TransmitTimeOffset = (b[84] << 8 | b[85]);
@@ -253,8 +246,8 @@ static int ert_idm_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     // Least significant nibble of endpoint_type is  equivalent to SCM's endpoint type field
     // id info from https://github.com/bemasher/rtlamr/wiki/Compatible-Meters
 
-    char *meter_type = get_meter_type_name(ERTType);
-    // fprintf(stderr, "meter_type = %s\n", meter_type);
+    char const *meter_type = get_meter_type_name(ERTType);
+    // decoder_logf(decoder, 0, __func__, "meter_type = %s", meter_type);
 
     /*
         Field key names and format set to  match rtlamr field names
@@ -270,6 +263,7 @@ static int ert_idm_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     /* clang-format off */
     data = data_make(
             "model",                            "",    DATA_STRING, "IDM",
+            "id",                               "",     DATA_INT,       ERTSerialNumber,
 
             // "PacketTypeID",             "",             DATA_FORMAT, "0x%02X", DATA_INT, PacketTypeID,
             "PacketTypeID",                     "",    DATA_STRING,       PacketTypeID_str,
@@ -278,7 +272,7 @@ static int ert_idm_decode(r_device *decoder, bitbuffer_t *bitbuffer)
             "ApplicationVersion",               "",     DATA_INT,       ApplicationVersion,
             "ERTType",                          "",     DATA_FORMAT,  "0x%02X", DATA_INT,    ERTType,
             // "ERTType",                          "",     DATA_INT,       ERTType,
-            "ERTSerialNumber",                  "",     DATA_INT,       ERTSerialNumber,
+            "ERTSerialNumber",                  "",     DATA_INT,       ERTSerialNumber, // NOTE: this is also "id"
             "ConsumptionIntervalCount",         "",     DATA_INT,       ConsumptionIntervalCount,
             // "ModuleProgrammingState",           "",     DATA_FORMAT, "0x%02X", DATA_INT, ModuleProgrammingState,
             "ModuleProgrammingState",           "",     DATA_FORMAT, "0x%02X", DATA_INT, ModuleProgrammingState,
@@ -380,8 +374,8 @@ static int ert_netidm_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     uint16_t PacketCRC;
     // char  PacketCRC_str[8];
 
-    if (decoder->verbose && bitbuffer->bits_per_row[0] > 600) {
-        fprintf(stderr, "%s: rows=%d, row0 len=%hu\n", __func__, bitbuffer->num_rows, bitbuffer->bits_per_row[0]);
+    if (bitbuffer->bits_per_row[0] > 600) {
+        decoder_logf(decoder, 1, __func__, "rows=%d, row0 len=%hu", bitbuffer->num_rows, bitbuffer->bits_per_row[0]);
     }
 
     if (bitbuffer->bits_per_row[0] < IDM_PACKET_BITLEN) {
@@ -390,9 +384,7 @@ static int ert_netidm_decode(r_device *decoder, bitbuffer_t *bitbuffer)
 
     sync_index = bitbuffer_search(bitbuffer, 0, 0, idm_frame_sync, 24);
 
-    if (decoder->verbose) {
-        fprintf(stderr, "%s: sync_index=%u\n", __func__, sync_index);
-    }
+    decoder_logf(decoder, 1, __func__, "sync_index=%u", sync_index);
 
     if (sync_index >= bitbuffer->bits_per_row[0]) {
         return DECODE_ABORT_EARLY;
@@ -403,8 +395,7 @@ static int ert_netidm_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     }
 
     bitbuffer_extract_bytes(bitbuffer, 0, sync_index, b, IDM_PACKET_BITLEN);
-    if (decoder->verbose)
-        bitrow_printf(b, IDM_PACKET_BITLEN, "%s bitrow_printf", __func__);
+    decoder_log_bitrow(decoder, 1, __func__, b, IDM_PACKET_BITLEN, "");
 
     // uint32_t t_16; // temp vars
     // uint32_t t_32;
@@ -452,8 +443,8 @@ static int ert_netidm_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     http://davestech.blogspot.com/2008/02/itron-remote-read-electric-meter.html
     SCM1 Counter1 Meter has been inverted
     SCM1 Counter2 Meter has been removed
-    SCM2 Counter3 Meter detected a button–press demand reset
-    SCM2 Counter4 Meter has a low-battery/end–of–calendar warning
+    SCM2 Counter3 Meter detected a button-press demand reset
+    SCM2 Counter4 Meter has a low-battery/end-of-calendar warning
     SCM3 Counter5 Meter has an error or a warning that can affect billing
     SCM3 Counter6 Meter has a warning that may or may not require a site visit,
     */
@@ -461,23 +452,20 @@ static int ert_netidm_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     strncpy(p, "0x", sizeof(TamperCounters_str));
     p += 2;
     for (int j = 0; j < 6; j++) {
-        p += sprintf(p, "%02X", b[13 + j]);
+        // GCC-14 is confused by sprintf()
+        p += snprintf(p, 3, "%02X", b[13 + j]);
     }
-    if (decoder->verbose > 1)
-        bitrow_printf(&b[13], 6 * 8, "%s TamperCounters_str   %s\t", __func__, TamperCounters_str);
-
+    decoder_logf_bitrow(decoder, 2, __func__, &b[13], 6 * 8, "TamperCounters_str   %s", TamperCounters_str);
 
     //  should this be included ?
     p = Unknown_field_1_str;
     strncpy(p, "0x", sizeof(Unknown_field_1_str));
     p += 2;
     for (int j = 0; j < 7; j++) {
-        p += sprintf(p, "%02X", b[19 + j]);
+        // GCC-14 is confused by sprintf()
+        p += snprintf(p, 3, "%02X", b[19 + j]);
     }
-    if (decoder->verbose) {
-        bitrow_printf(&b[19], 7 * 8, "%s Unknown_field_1 %s\t", __func__, Unknown_field_1_str);
-        bitrow_debug(&b[19], 7 * 8);
-    }
+    decoder_logf_bitrow(decoder, 1, __func__, &b[19], 7 * 8, "Unknown_field_1 %s", Unknown_field_1_str);
 
     // 3 bytes
     LastGenerationCount = ((uint32_t)(b[26] << 16)) | (b[27] << 8) | (b[28]);
@@ -487,35 +475,31 @@ static int ert_netidm_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     strncpy(p, "0x", sizeof(Unknown_field_2_str));
     p += 2;
     for (int j = 0; j < 3; j++) {
-        p += sprintf(p, "%02X", b[29 + j]);
+        // GCC-14 is confused by sprintf()
+        p += snprintf(p, 3, "%02X", b[29 + j]);
     }
-    if (decoder->verbose)
-        bitrow_printf(&b[29], 3 * 8, "%s Unknown_field_1 %s\t", __func__, Unknown_field_2_str);
+    decoder_logf_bitrow(decoder, 1, __func__, &b[29], 3 * 8, "Unknown_field_1 %s", Unknown_field_2_str);
 
     LastConsumptionCount = ((uint32_t)b[32] << 24) | (b[33] << 16) | (b[34] << 8) | (b[35]);
 
-    if (decoder->verbose)
-        bitrow_printf(&b[32], 32, "%s LastConsumptionCount %d\t", __func__, LastConsumptionCount);
+    decoder_logf_bitrow(decoder, 1, __func__, &b[32], 32, "LastConsumptionCount %d", LastConsumptionCount);
 
     // DifferentialConsumptionIntervals[] = 27 intervals of 14-bit unsigned integers.
     unsigned pos = sync_index + (36 * 8);
-    if (decoder->verbose)
-        bitrow_printf(&b[36], 48 * 8, "%s DifferentialConsumptionIntervals", __func__);
+    decoder_log_bitrow(decoder, 1, __func__, &b[36], 48 * 8, "DifferentialConsumptionIntervals");
     for (int j = 0; j < 27; j++) {
         uint8_t buffy[4] = {0};
 
         bitbuffer_extract_bytes(bitbuffer, 0, pos, buffy, 14);
         DifferentialConsumptionIntervals[j] = ((uint16_t)buffy[0] << 6) | (buffy[1] >> 2);
-        // bitrow_printf(buffy, 14, "%d\t%d\t", j, DifferentialConsumptionIntervals[j]);
+        // decoder_logf_bitrow(decoder, 0, __func__, buffy, 14, "%d %d", j, DifferentialConsumptionIntervals[j]);
         pos += 14;
     }
-    if (decoder->verbose) {
-        fprintf(stderr, "%s DifferentialConsumptionIntervals:\n\t", __func__);
+    if (decoder_verbose(decoder)) {
+        decoder_log(decoder, 1, __func__, "DifferentialConsumptionIntervals");
         for (int j = 0; j < 27; j++) {
-            fprintf(stderr, "%d ", DifferentialConsumptionIntervals[j]);
+            decoder_logf(decoder, 1, __func__, "%d", DifferentialConsumptionIntervals[j]);
         }
-        fprintf(stderr, "\n");
-        // bitrow_debug(&b[36], 48*8);
     }
 
     TransmitTimeOffset = (b[84] << 8 | b[85]);
@@ -549,9 +533,9 @@ static int ert_netidm_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     }
     */
 
-    char *meter_type =  get_meter_type_name(ERTType);
+    char const *meter_type = get_meter_type_name(ERTType);
 
-    // fprintf(stderr, "meter_type = %s\n", meter_type);
+    // decoder_logf(decoder, 0, __func__, "meter_type = %s", meter_type);
 
     /*
         Field key names and format set to  match rtlamr field names
@@ -568,6 +552,7 @@ static int ert_netidm_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     /* clang-format off */
     data = data_make(
             "model",                            "",     DATA_STRING, "NETIDM",
+            "id",                               "",     DATA_INT,       ERTSerialNumber,
 
             "PacketTypeID",                     "",     DATA_STRING,       PacketTypeID_str,
             "PacketLength",                     "",     DATA_INT,       PacketLength,
@@ -575,7 +560,7 @@ static int ert_netidm_decode(r_device *decoder, bitbuffer_t *bitbuffer)
             "ApplicationVersion",               "",     DATA_INT,       ApplicationVersion,
 
             "ERTType",                          "",     DATA_FORMAT,  "0x%02X", DATA_INT,    ERTType,
-            "ERTSerialNumber",                  "",     DATA_INT,       ERTSerialNumber,
+            "ERTSerialNumber",                  "",     DATA_INT,       ERTSerialNumber, // NOTE: this is also "id"
             "ConsumptionIntervalCount",         "",     DATA_INT,       ConsumptionIntervalCount,
             "ModuleProgrammingState",           "",     DATA_FORMAT, "0x%02X", DATA_INT, ModuleProgrammingState,
             // "ModuleProgrammingState",           "",     DATA_STRING,    ModuleProgrammingState_str,
@@ -603,10 +588,11 @@ static int ert_netidm_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     return 1;
 }
 
-static char *output_fields[] = {
+static char const *const output_fields[] = {
 
         // Common fields
         "model",
+        "id",
         "PacketTypeID",
         "PacketLength",
         "HammingCode",
@@ -640,7 +626,7 @@ static char *output_fields[] = {
 //      Freq 912600155
 //     -X n=L58,m=OOK_MC_ZEROBIT,s=30,l=30,g=20000,r=20000,match={24}0x16a31e,preamble={1}0x00
 
-r_device ert_idm = {
+r_device const ert_idm = {
         .name        = "ERT Interval Data Message (IDM)",
         .modulation  = OOK_PULSE_MANCHESTER_ZEROBIT,
         .short_width = 30,
@@ -650,11 +636,10 @@ r_device ert_idm = {
         // .gap_limit   = 2500,
         // .reset_limit = 4000,
         .decode_fn = &ert_idm_decode,
-        .disabled  = 0,
         .fields    = output_fields,
 };
 
-r_device ert_netidm = {
+r_device const ert_netidm = {
         .name        = "ERT Interval Data Message (IDM) for Net Meters",
         .modulation  = OOK_PULSE_MANCHESTER_ZEROBIT,
         .short_width = 30,
@@ -664,6 +649,5 @@ r_device ert_netidm = {
         // .gap_limit   = 2500,
         // .reset_limit = 4000,
         .decode_fn = &ert_netidm_decode,
-        .disabled  = 0,
         .fields    = output_fields,
 };

@@ -105,6 +105,7 @@ or `(echo "GET /stream HTTP/1.0\n"; sleep 600) | socat - tcp:127.0.0.1:8433`
 #include "list.h" // used for protocols
 #include "jsmn.h"
 #include "mongoose.h"
+#include "logger.h"
 #include "fatal.h"
 #include <stdbool.h>
 
@@ -138,7 +139,7 @@ typedef struct {
     void **tail;
 } ring_list_t;
 
-ring_list_t *ring_list_new(unsigned size)
+static ring_list_t *ring_list_new(unsigned size)
 {
     ring_list_t *ring = calloc(1, sizeof(ring_list_t));
     if (!ring) {
@@ -160,7 +161,7 @@ ring_list_t *ring_list_new(unsigned size)
 }
 
 // the ring needs to be empty before calling this
-void ring_list_free(ring_list_t *ring)
+static void ring_list_free(ring_list_t *ring)
 {
     if (ring) {
         if (ring->data)
@@ -170,7 +171,7 @@ void ring_list_free(ring_list_t *ring)
 }
 
 // free the data returned
-void *ring_list_shift(ring_list_t *ring)
+static void *ring_list_shift(ring_list_t *ring)
 {
     if (!ring->head)
         return NULL;
@@ -187,7 +188,7 @@ void *ring_list_shift(ring_list_t *ring)
 }
 
 // retain data before passing in and free the data returned.
-void *ring_list_push(ring_list_t *ring, void *data)
+static void *ring_list_push(ring_list_t *ring, void *data)
 {
     *ring->tail = data;
 
@@ -204,12 +205,12 @@ void *ring_list_push(ring_list_t *ring, void *data)
     return NULL;
 }
 
-void **ring_list_iter(ring_list_t *ring)
+static void **ring_list_iter(ring_list_t *ring)
 {
     return ring->head;
 }
 
-void **ring_list_next(ring_list_t *ring, void **iter)
+static void **ring_list_next(ring_list_t *ring, void **iter)
 {
     if (!iter)
         return NULL;
@@ -253,6 +254,7 @@ static data_t *protocols_data(r_cfg_t *cfg)
     list_t devs = {0};
     list_ensure_size(&devs, cfg->num_r_devices);
 
+    // list regular protocols
     for (int i = 0; i < cfg->num_r_devices; ++i) {
         r_device *dev = &cfg->devices[i];
 
@@ -265,7 +267,7 @@ static data_t *protocols_data(r_cfg_t *cfg)
             }
         }
         int fields_len = 0;
-        for (char **iter = dev->fields; iter && *iter; ++iter) {
+        for (char const *const *iter = dev->fields; iter && *iter; ++iter) {
             fields_len++;
         }
         data_t *data = data_make(
@@ -287,13 +289,14 @@ static data_t *protocols_data(r_cfg_t *cfg)
         list_push(&devs, data);
     }
 
+    // list dynamic protocols (flex decoders and create instances)
     for (void **iter = cfg->demod->r_devs.elems; iter && *iter; ++iter) {
         r_device *dev = *iter;
         if (dev->protocol_num > 0) {
                 continue;
         }
         int fields_len = 0;
-        for (char **iter = dev->fields; iter && *iter; ++iter) {
+        for (char const *const *iter2 = dev->fields; iter2 && *iter2; ++iter2) {
             fields_len++;
         }
         data_t *data = data_make(
@@ -385,13 +388,13 @@ static int json_parse(rpc_t *rpc, struct mg_str const *json)
     jsmn_init(&p);
     r = jsmn_parse(&p, json->p, json->len, t, sizeof(t) / sizeof(t[0]));
     if (r < 0) {
-        printf("Failed to parse JSON: %d\n", r);
+        print_logf(LOG_WARNING, __func__, "Failed to parse JSON: %d", r);
         return -1;
     }
 
     /* Assume the top-level element is an object */
     if (r < 1 || t[0].type != JSMN_OBJECT) {
-        printf("Object expected\n");
+        print_log(LOG_WARNING, __func__, "Object expected");
         return -1;
     }
 
@@ -414,7 +417,7 @@ static int json_parse(rpc_t *rpc, struct mg_str const *json)
             // compare endptr to t[i].end
         }
         else {
-            printf("Unexpected key: %.*s\n", t[i].end - t[i].start, json->p + t[i].start);
+            print_logf(LOG_WARNING, __func__, "Unexpected key: %.*s", t[i].end - t[i].start, json->p + t[i].start);
         }
     }
 
@@ -443,13 +446,13 @@ static int jsonrpc_parse(rpc_t *rpc, struct mg_str const *json)
     jsmn_init(&p);
     r = jsmn_parse(&p, json->p, json->len, t, sizeof(t) / sizeof(t[0]));
     if (r < 0) {
-        printf("Failed to parse JSON: %d\n", r);
+        print_logf(LOG_WARNING, __func__, "Failed to parse JSON: %d", r);
         return -1;
     }
 
     /* Assume the top-level element is an object */
     if (r < 1 || t[0].type != JSMN_OBJECT) {
-        printf("Object expected\n");
+        print_log(LOG_WARNING, __func__, "Object expected");
         return -1;
     }
 
@@ -496,7 +499,7 @@ static int jsonrpc_parse(rpc_t *rpc, struct mg_str const *json)
             i += t[i + 1].size + 1;
         }
         else {
-            printf("Unexpected key: %.*s\n", t[i].end - t[i].start, json->p + t[i].start);
+            print_logf(LOG_WARNING, __func__, "Unexpected key: %.*s", t[i].end - t[i].start, json->p + t[i].start);
         }
     }
 
@@ -512,7 +515,7 @@ static int jsonrpc_parse(rpc_t *rpc, struct mg_str const *json)
     return 0;
 }
 
-void rpc_exec(rpc_t *rpc, r_cfg_t *cfg)
+static void rpc_exec(rpc_t *rpc, r_cfg_t *cfg)
 {
     if (!rpc || !rpc->method || !*rpc->method) {
         rpc->response(rpc, -1, "Method invalid", 0);
@@ -571,7 +574,7 @@ void rpc_exec(rpc_t *rpc, r_cfg_t *cfg)
         data_free(data);
     }
     else if (!strcmp(rpc->method, "get_protocols")) {
-        char buf[65536]; // we expect the protocol string to be around 60k bytes.
+        char buf[102400]; // we expect the protocol string to be around 80k bytes.
         data_t *data = protocols_data(cfg);
         data_print_jsons(data, buf, sizeof(buf));
         rpc->response(rpc, 1, buf, 0);
@@ -732,6 +735,76 @@ static void handle_redirect(struct mg_connection *nc, struct http_message *hm)
             "\r\n\r\n");
 }
 
+static void handle_openmetrics(struct mg_connection *nc, struct http_message *hm)
+{
+    if (mg_vcmp(&hm->method, "GET") != 0) {
+        mg_http_send_error(nc, 405, NULL); // 405 Method Not Allowed
+        return;
+    }
+
+    struct http_server_context *ctx = nc->user_data;
+    r_cfg_t *cfg = ctx->cfg;
+
+    time_t now;
+    time(&now);
+
+    char buf[2000];
+    int len = snprintf(buf, sizeof(buf),
+            "# TYPE uptime_seconds counter\n"
+            "# UNIT uptime_seconds seconds\n"
+            "# HELP uptime_seconds Program uptime.\n"
+            "uptime_seconds_total %.1f\n"
+            "uptime_seconds_created %.1f\n"
+            "# TYPE decoder_enabled gauge\n"
+            "# HELP decoder_enabled Number of enabled decoders.\n"
+            "decoder_enabled %u\n"
+            "# TYPE input_uptime_seconds counter\n"
+            "# UNIT input_uptime_seconds seconds\n"
+            "# HELP input_uptime_seconds SDR Receiver uptime.\n"
+            "input_uptime_seconds_total %.1f\n"
+            "input_uptime_seconds_created %.1f\n"
+            "# TYPE input_count_frames counter\n"
+            "# UNIT input_count_frames frames\n"
+            "# HELP input_count_frames Number of SDR frames received.\n"
+            "input_count_frames_total %u\n"
+            "# TYPE input_squelch_frames counter\n"
+            "# UNIT input_squelch_frames frames\n"
+            "# HELP input_squelch_frames Number of SDR frames skipped by squelch.\n"
+            "input_squelch_frames_total %u\n"
+            "# TYPE input_ook_frames counter\n"
+            "# UNIT input_ook_frames frames\n"
+            "# HELP input_ook_frames Number of SDR frames with OOK demodulation.\n"
+            "input_ook_frames_total %u\n"
+            "# TYPE input_fsk_frames counter\n"
+            "# UNIT input_fsk_frames frames\n"
+            "# HELP input_fsk_frames Number of SDR frames with FSK demodulation.\n"
+            "input_fsk_frames_total %u\n"
+            "# TYPE input_event_frames counter\n"
+            "# UNIT input_event_frames frames\n"
+            "# HELP input_event_frames Number of SDR frames with decode events.\n"
+            "input_event_frames_total %u\n"
+            "# EOF\n",
+            (float)(now - cfg->running_since), // uptime_seconds_total,
+            (float)cfg->running_since,         // uptime_seconds_created,
+            (unsigned)cfg->demod->r_devs.len,  // decoder_enabled,
+            (float)(now - cfg->sdr_since),     // input_uptime_seconds_total,
+            (float)cfg->sdr_since,             // input_uptime_seconds_created,
+            cfg->total_frames_count,           // input_count_frames_total,
+            cfg->total_frames_squelch,         // input_squelch_frames_total,
+            cfg->total_frames_ook,             // input_ook_frames_total,
+            cfg->total_frames_fsk,             // input_fsk_frames_total,
+            cfg->total_frames_events);         // input_event_frames_total,
+
+    mg_printf(nc,
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Length: %u\r\n"
+            "Content-Type: text/plain; version=0.0.4; charset=utf-8\r\n"
+            "\r\n",
+            len);
+    mg_send(nc, buf, (size_t)len);
+    nc->flags |= MG_F_SEND_AND_CLOSE;
+}
+
 // reply to ws command
 static void rpc_response_ws(rpc_t *rpc, int ret_code, char const *message, int arg)
 {
@@ -881,6 +954,9 @@ static void handle_json_stream(struct mg_connection *nc, struct http_message *hm
 // curl -D - -d "cmd=report_meta&arg=level" -X POST 'http://127.0.0.1:8433/cmd'
 // http :8433/cmd cmd==center_frequency val==868000000'
 // http --form POST :8433/cmd cmd=report_meta arg=level val=1
+// xh :8433/cmd cmd==center_frequency val==433920123
+// xh :8433/cmd cmd==sample_rate val==250000
+// xh :8433/cmd cmd==gain arg==10
 static void handle_cmd_rpc(struct mg_connection *nc, struct http_message *hm)
 {
     struct http_server_context *ctx = nc->user_data;
@@ -909,7 +985,7 @@ static void handle_cmd_rpc(struct mg_connection *nc, struct http_message *hm)
     }
     char *endptr = NULL;
     rpc.val = strtol(val, &endptr, 10);
-    fprintf(stderr, "POST Got %s, arg %s, val %s (%d)\n", cmd, arg, val, rpc.val);
+    fprintf(stderr, "POST Got %s, arg %s, val %s (%u)\n", cmd, arg, val, rpc.val);
 
     rpc_exec(&rpc, ctx->cfg);
 }
@@ -1038,6 +1114,9 @@ static void ev_handler(struct mg_connection *nc, int ev, void *ev_data)
         else if (mg_vcmp(&hm->uri, "/stream") == 0) {
             handle_json_stream(nc, hm);
         }
+        else if (mg_vcmp(&hm->uri, "/metrics") == 0) {
+            handle_openmetrics(nc, hm);
+        }
         else if (mg_vcmp(&hm->uri, "/api") == 0) {
             //handle_api_query(nc, hm);
         }
@@ -1127,8 +1206,9 @@ static struct http_server_context *http_server_start(struct mg_mgr *mgr, char co
 
     ctx->conn = mg_bind_opt(mgr, address, ev_handler, bind_opts);
     if (ctx->conn == NULL) {
-        fprintf(stderr, "Error starting server on address %s: %s\n", address,
+        print_logf(LOG_ERROR, __func__, "Error starting server on address %s: %s", address,
                 *bind_opts.error_string);
+        ring_list_free(ctx->history);
         free(ctx);
         return NULL;
     }
@@ -1137,7 +1217,7 @@ static struct http_server_context *http_server_start(struct mg_mgr *mgr, char co
     ctx->server_opts.document_root            = "."; // Serve current directory
     ctx->server_opts.enable_directory_listing = "yes";
 
-    printf("Starting HTTP server on address %s, serving %s\n", address,
+    print_logf(LOG_NOTICE, "HTTP server", "Serving HTTP-API on address %s, serving %s", address,
             ctx->server_opts.document_root);
 
     return ctx;
@@ -1179,6 +1259,8 @@ static int http_server_stop(struct http_server_context *ctx)
         free((data_t *)*iter);
     ring_list_free(ctx->history);
 
+    free(ctx);
+
     return 0;
 }
 
@@ -1189,7 +1271,7 @@ typedef struct {
     struct http_server_context *server;
 } data_output_http_t;
 
-static void print_http_data(data_output_t *output, data_t *data, char const *format)
+static void R_API_CALLCONV print_http_data(data_output_t *output, data_t *data, char const *format)
 {
     UNUSED(format);
     data_output_http_t *http = (data_output_http_t *)output;
@@ -1221,7 +1303,7 @@ static void print_http_data(data_output_t *output, data_t *data, char const *for
     }
 }
 
-static void data_output_http_free(data_output_t *output)
+static void R_API_CALLCONV data_output_http_free(data_output_t *output)
 {
     data_output_http_t *http = (data_output_http_t *)output;
 
@@ -1241,6 +1323,7 @@ struct data_output *data_output_http_create(struct mg_mgr *mgr, char const *host
         return NULL;
     }
 
+    http->output.log_level    = LOG_TRACE; // sensible default, not parsed from args
     http->output.print_data   = print_http_data;
     http->output.output_free  = data_output_http_free;
 
@@ -1249,5 +1332,5 @@ struct data_output *data_output_http_create(struct mg_mgr *mgr, char const *host
         exit(1);
     }
 
-    return &http->output;
+    return (struct data_output *)http;
 }

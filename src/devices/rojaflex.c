@@ -36,7 +36,7 @@ Data documentation:
 - 0xFF     - Size always "0x8"
 - 0xFFFFFF - ID, I assume that differs per installation, but is static then
 - 0xF      - Unknown (is static 0x2) - Not sure if it is also the HomeID
-- 0xF      - Channel: 1-15 single channels (one shutter is registert to one channel), 0 means all
+- 0xF      - Channel: 1-15 single channels (one shutter is registered to one channel), 0 means all
 - 0xFF     - Command ID    (0x0a = stop, 0x1a = up,0x8a = down, 0xea = Request)
 - 0xFF     - Command Value (in status from shutter this is the percent value. 0% for open 100% for close)
 
@@ -110,9 +110,7 @@ static int rojaflex_decode(r_device *decoder, bitbuffer_t *bitbuffer)
 
     // Extract raw line
     bitbuffer_extract_bytes(bitbuffer, row, start_pos + sizeof(message_preamble) * 8, msg, dataframe_bitcount);
-    if (decoder->verbose > 1) {
-        bitrow_printf(msg, dataframe_bitcount, "%s: frame data: ", __func__);
-    }
+    decoder_log_bitrow(decoder, 2, __func__, msg, dataframe_bitcount, "frame data");
 
     // Check CRC if available
     if (dataframe_bitcount == DATAFRAME_BITCOUNT_INCL_CRC) {
@@ -120,8 +118,7 @@ static int rojaflex_decode(r_device *decoder, bitbuffer_t *bitbuffer)
         uint16_t crc_calc    = crc16(&msg[LENGTH_OFFSET], 9, 0x8005, 0xffff); // "CRC-16/CMS"
 
         if (crc_message != crc_calc) {
-            if (decoder->verbose)
-                fprintf(stderr, "%s: CRC invalid message:%04x != calc:%04x\n", __func__, crc_message, crc_calc);
+            decoder_logf(decoder, 1, __func__, "CRC invalid message:%04x != calc:%04x", crc_message, crc_calc);
 
             return DECODE_FAIL_MIC;
         }
@@ -147,7 +144,7 @@ static int rojaflex_decode(r_device *decoder, bitbuffer_t *bitbuffer)
         }
     }
 
-    char *cmd_str = "unknown";
+    char const *cmd_str = "unknown";
     switch (msg[COMMAND_ID_OFFSET]) {
     case COMMAND_ID_STOP:
         cmd_str = "Stop"; break;
@@ -224,11 +221,7 @@ static int rojaflex_decode(r_device *decoder, bitbuffer_t *bitbuffer)
         uint8_t msg_new[19];
         uint16_t sum = 0;
 
-        if (decoder->verbose > 1) {
-            fprintf(stderr, "\n");
-            fprintf(stderr, "%s: Signal cloner\n", __func__);
-            fprintf(stderr, "%s: \n", __func__);
-        }
+        decoder_log(decoder, 2, __func__, "Signal cloner");
 
         do {
             for (uint8_t i = 0; i < sizeof(remote_commands); ++i) {
@@ -280,14 +273,10 @@ static int rojaflex_decode(r_device *decoder, bitbuffer_t *bitbuffer)
                 /*
                 // Print final command
                 */
-                if (decoder->verbose > 1) {
-                    bitrow_printf(&msg_new[0], sizeof(msg_new) * 8, "%s: CH:%01x Command:0x%02x: ", __func__, channel, command);
-                }
+                decoder_logf_bitrow(decoder, 2, __func__, &msg_new[0], sizeof(msg_new) * 8, "CH:%01x Command:0x%02x", channel, command);
             }
 
-            if (decoder->verbose > 1) {
-                fprintf(stderr, "\n");
-            }
+            decoder_log(decoder, 2, __func__, "");
             ++channel;
         } while ((channel <= 0xF) && GENERATE_COMMANDS_FOR_ALL_CHANNELS);
     }
@@ -295,7 +284,7 @@ static int rojaflex_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     return 1;
 }
 
-static char *output_fields[] = {
+static char const *const output_fields[] = {
         "model",
         "id",
         "channel",
@@ -307,7 +296,7 @@ static char *output_fields[] = {
         NULL,
 };
 
-r_device rojaflex = {
+r_device const rojaflex = {
         .name        = "RojaFlex shutter and remote devices",
         .modulation  = FSK_PULSE_PCM,
         .short_width = 100,
@@ -315,6 +304,5 @@ r_device rojaflex = {
         .reset_limit = 102400,
         .sync_width  = 0,
         .decode_fn   = &rojaflex_decode,
-        .disabled    = 0,
         .fields      = output_fields,
 };

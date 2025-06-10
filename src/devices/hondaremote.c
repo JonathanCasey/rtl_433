@@ -18,12 +18,12 @@ Note that this is actually Manchester coded and should be changed.
 */
 #include "decoder.h"
 
-static char const *command_code[] = {"boot", "unlock" , "lock",};
+static char const *const command_code[] = {"boot", "unlock", "lock",};
 
 static char const *get_command_codes(const uint8_t *bytes)
 {
     unsigned char command = bytes[46] - 0xAA;
-    if (command < (sizeof(command_code)/sizeof(command_code[0]))) {
+    if (command < (sizeof(command_code) / sizeof(command_code[0]))) {
         return command_code[command];
     } else {
         return "unknown";
@@ -41,7 +41,7 @@ static int hondaremote_callback(r_device *decoder, bitbuffer_t *bitbuffer)
         b = bitbuffer->bb[row];
         // Validate package
         if (((bitbuffer->bits_per_row[row] < 385) || (bitbuffer->bits_per_row[row] > 394)) ||
-                ((b[0] != 0xFF ) || (b[38] != 0xFF)))
+                ((b[0] != 0xFF) || (b[38] != 0xFF)))
             continue; // DECODE_ABORT_LENGTH
 
         code = get_command_codes(b);
@@ -61,14 +61,14 @@ static int hondaremote_callback(r_device *decoder, bitbuffer_t *bitbuffer)
     return 0;
 }
 
-static char *output_fields[] = {
+static char const *const output_fields[] = {
         "model",
         "id",
         "code",
         NULL,
 };
 
-r_device hondaremote = {
+r_device const hondaremote = {
         .name        = "Honda Car Key",
         .modulation  = FSK_PULSE_PWM,
         .short_width = 250,

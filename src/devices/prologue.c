@@ -4,7 +4,8 @@
 /** @fn int prologue_callback(r_device *decoder, bitbuffer_t *bitbuffer)
 Prologue sensor protocol,
 also FreeTec NC-7104 sensor for FreeTec Weatherstation NC-7102,
-and Pearl NC-7159-675.
+also Pearl NC-7159-675,
+also TFA pool thermometer 30.3240.10 #2651
 The sensor can be bought at Clas Ohlson.
 
 Note: this is a false positive for AlectoV1.
@@ -30,8 +31,6 @@ The data is grouped in 9 nibbles
 */
 
 #include "decoder.h"
-
-extern int alecto_checksum(uint8_t *b);
 
 static int prologue_callback(r_device *decoder, bitbuffer_t *bitbuffer)
 {
@@ -61,10 +60,6 @@ static int prologue_callback(r_device *decoder, bitbuffer_t *bitbuffer)
     if ((b[0] & 0xF0) != 0x90 && (b[0] & 0xF0) != 0x50)
         return DECODE_FAIL_SANITY;
 
-    // Check for Alecto collision, if the checksum is correct it's not Prologue/ThermoPro-TX2
-    if (alecto_checksum(b))
-        return DECODE_FAIL_SANITY;
-
     // Prologue/ThermoPro-TX2 sensor
     type     = b[0] >> 4;
     id       = ((b[0] & 0x0F) << 4) | ((b[1] & 0xF0) >> 4);
@@ -82,7 +77,7 @@ static int prologue_callback(r_device *decoder, bitbuffer_t *bitbuffer)
             "id",            "",            DATA_INT,    id,
             "channel",       "Channel",     DATA_INT,    channel,
             "battery_ok",    "Battery",     DATA_INT,    !!battery,
-            "temperature_C", "Temperature", DATA_FORMAT, "%.02f C", DATA_DOUBLE, temp_raw * 0.1,
+            "temperature_C", "Temperature", DATA_FORMAT, "%.2f C", DATA_DOUBLE, temp_raw * 0.1,
             "humidity",      "Humidity",    DATA_COND,   humidity != 0xcc, DATA_FORMAT, "%u %%", DATA_INT, humidity,
             "button",        "Button",      DATA_INT,    button,
             NULL);
@@ -92,7 +87,7 @@ static int prologue_callback(r_device *decoder, bitbuffer_t *bitbuffer)
     return 1;
 }
 
-static char *output_fields[] = {
+static char const *const output_fields[] = {
         "model",
         "subtype",
         "id",
@@ -104,7 +99,7 @@ static char *output_fields[] = {
         NULL,
 };
 
-r_device prologue = {
+r_device const prologue = {
         .name        = "Prologue, FreeTec NC-7104, NC-7159-675 temperature sensor",
         .modulation  = OOK_PULSE_PPM,
         .short_width = 2000,
@@ -112,6 +107,6 @@ r_device prologue = {
         .gap_limit   = 7000,
         .reset_limit = 10000,
         .decode_fn   = &prologue_callback,
-        .disabled    = 0,
+        .priority    = 10, // Alecto collision, if Alecto checksum is correct it's not Prologue/ThermoPro-TX2
         .fields      = output_fields,
 };

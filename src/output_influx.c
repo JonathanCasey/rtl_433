@@ -14,7 +14,7 @@
 // note: our unit header includes unistd.h for gethostname() via data.h
 #include "output_influx.h"
 #include "optparse.h"
-#include "util.h"
+#include "logger.h"
 #include "fatal.h"
 #include "r_util.h"
 
@@ -31,11 +31,14 @@ typedef struct {
     struct data_output output;
     struct mg_mgr *mgr;
     struct mg_connection *conn;
+    struct mg_connection *timer;
+    int reconnect_delay;
     int prev_status;
     int prev_resp_code;
     char hostname[64];
     char url[400];
     char extra_headers[150];
+    tls_opts_t tls_opts;
     int databufidxfill;
     struct mbuf databufs[2];
 
@@ -52,16 +55,22 @@ static void influx_client_event(struct mg_connection *nc, int ev, void *ev_data)
     switch (ev) {
     case MG_EV_CONNECT: {
         int connect_status = *(int *)ev_data;
-        if (connect_status != 0) {
+        if (connect_status == 0) {
+            // Success
+            if (ctx) {
+                ctx->reconnect_delay = 0;
+            }
+        } else {
             // Error, print only once
             if (ctx) {
                 if (ctx->prev_status != connect_status)
-                    fprintf(stderr, "InfluxDB connect error: %s\n", strerror(connect_status));
+                    print_logf(LOG_WARNING, "InfluxDB", "InfluxDB connect error: %s", strerror(connect_status));
                 ctx->conn = NULL;
             }
         }
-        if (ctx)
+        if (ctx) {
             ctx->prev_status = connect_status;
+        }
         break;
     }
     case MG_EV_HTTP_CHUNK: // response is normally empty (so mongoose thinks we received a chunk only)
@@ -72,25 +81,48 @@ static void influx_client_event(struct mg_connection *nc, int ev, void *ev_data)
         }
         else {
             if (ctx && ctx->prev_resp_code != hm->resp_code)
-                fprintf(stderr, "InfluxDB replied HTTP code: %d with message:\n%s\n", hm->resp_code, hm->body.p);
+                print_logf(LOG_WARNING, "InfluxDB", "InfluxDB replied HTTP code: %d with message:\n%s", hm->resp_code, hm->body.p);
         }
         if (ctx) {
             ctx->prev_resp_code = hm->resp_code;
         }
         break;
     case MG_EV_CLOSE:
-        if (ctx) {
-            ctx->conn = NULL;
-            influx_client_send(ctx);
+        if (!ctx) {
+            break; // shutting down
+        }
+        ctx->conn = NULL;
+        if (!ctx->timer) {
+            break; // shutting down
+        }
+        // Timer for next connect attempt, sends us MG_EV_TIMER event
+        mg_set_timer(ctx->timer, mg_time() + ctx->reconnect_delay);
+        if (ctx->reconnect_delay < 60) {
+            // 0, 1, 3, 6, 10, 16, 25, 39, 60
+            ctx->reconnect_delay = (ctx->reconnect_delay + 1) * 3 / 2;
         }
         break;
     }
 }
 
+static void influx_client_timer(struct mg_connection *nc, int ev, void *ev_data)
+{
+    // note that while shutting down the ctx is NULL
+    influx_client_t *ctx = (influx_client_t *)nc->user_data;
+    (void)ev_data;
+
+    switch (ev) {
+    case MG_EV_TIMER: {
+        // Try to reconnect, ends if no data to send
+        influx_client_send(ctx);
+        break;
+    }
+    }
+}
+
 static influx_client_t *influx_client_init(influx_client_t *ctx, char const *url, char const *token)
 {
-    strncpy(ctx->url, url, sizeof(ctx->url));
-    ctx->url[sizeof(ctx->url) - 1] = '\0';
+    snprintf(ctx->url, sizeof(ctx->url), "%s", url);
     snprintf(ctx->extra_headers, sizeof (ctx->extra_headers), "Authorization: Token %s\r\n", token);
 
     return ctx;
@@ -107,9 +139,40 @@ static void influx_client_send(influx_client_t *ctx)
     if (ctx->conn || !buf->len)
         return;
 
-    struct mg_connect_opts opts = {.user_data = ctx};
+    char const *error_string = NULL;
+    struct mg_connect_opts opts = {.user_data = ctx, .error_string = &error_string};
+    if (ctx->tls_opts.tls_ca_cert) {
+        print_logf(LOG_INFO, "InfluxDB", "influxs (TLS) parameters are: "
+                                       "tls_cert=%s "
+                                       "tls_key=%s "
+                                       "tls_ca_cert=%s "
+                                       "tls_cipher_suites=%s "
+                                       "tls_server_name=%s "
+                                       "tls_psk_identity=%s "
+                                       "tls_psk_key=%s ",
+                ctx->tls_opts.tls_cert,
+                ctx->tls_opts.tls_key,
+                ctx->tls_opts.tls_ca_cert,
+                ctx->tls_opts.tls_cipher_suites,
+                ctx->tls_opts.tls_server_name,
+                ctx->tls_opts.tls_psk_identity,
+                ctx->tls_opts.tls_psk_key);
+
+#if MG_ENABLE_SSL
+        opts.ssl_cert          = ctx->tls_opts.tls_cert;
+        opts.ssl_key           = ctx->tls_opts.tls_key;
+        opts.ssl_ca_cert       = ctx->tls_opts.tls_ca_cert;
+        opts.ssl_cipher_suites = ctx->tls_opts.tls_cipher_suites;
+        opts.ssl_server_name   = ctx->tls_opts.tls_server_name;
+        opts.ssl_psk_identity  = ctx->tls_opts.tls_psk_identity;
+        opts.ssl_psk_key       = ctx->tls_opts.tls_psk_key;
+#else
+        print_log(LOG_FATAL, __func__, "influxs (TLS) not available");
+        exit(1);
+#endif
+    }
     if ((ctx->conn = mg_connect_http_opt(ctx->mgr, influx_client_event, opts, ctx->url, ctx->extra_headers, buf->buf)) == NULL) {
-        fprintf(stderr, "Connect to InfluxDB (%s) failed\n", ctx->url);
+        print_logf(LOG_WARNING, "InfluxDB", "Connect to InfluxDB (%s) failed (%s)", ctx->url, error_string);
     }
     else {
         ctx->databufidxfill ^= 1;
@@ -180,7 +243,7 @@ static void mbuf_remove_part(struct mbuf *a, char *pos, size_t len)
     }
 }
 
-static void print_influx_array(data_output_t *output, data_array_t *array, char const *format)
+static void R_API_CALLCONV print_influx_array(data_output_t *output, data_array_t *array, char const *format)
 {
     UNUSED(array);
     UNUSED(format);
@@ -189,14 +252,14 @@ static void print_influx_array(data_output_t *output, data_array_t *array, char 
     mbuf_snprintf(buf, "\"array\""); // TODO
 }
 
-static void print_influx_data_escaped(data_output_t *output, data_t *data, char const *format)
+static void R_API_CALLCONV print_influx_data_escaped(data_output_t *output, data_t *data, char const *format)
 {
     char str[1000];
     data_print_jsons(data, str, sizeof (str));
     output->print_string(output, str, format);
 }
 
-static void print_influx_string_escaped(data_output_t *output, char const *str, char const *format)
+static void R_API_CALLCONV print_influx_string_escaped(data_output_t *output, char const *str, char const *format)
 {
     UNUSED(format);
     influx_client_t *influx = (influx_client_t *)output;
@@ -248,7 +311,7 @@ static void print_influx_string_escaped(data_output_t *output, char const *str, 
     databuf->len = databuf->size - size;
 }
 
-static void print_influx_string(data_output_t *output, char const *str, char const *format)
+static void R_API_CALLCONV print_influx_string(data_output_t *output, char const *str, char const *format)
 {
     UNUSED(format);
     influx_client_t *influx = (influx_client_t *)output;
@@ -257,7 +320,7 @@ static void print_influx_string(data_output_t *output, char const *str, char con
 }
 
 // Generate InfluxDB line protocol
-static void print_influx_data(data_output_t *output, data_t *data, char const *format)
+static void R_API_CALLCONV print_influx_data(data_output_t *output, data_t *data, char const *format)
 {
     UNUSED(format);
     influx_client_t *influx = (influx_client_t *)output;
@@ -301,7 +364,8 @@ static void print_influx_data(data_output_t *output, data_t *data, char const *f
         else if (!strcmp(data->key, "type")
                 || !strcmp(data->key, "subtype")
                 || !strcmp(data->key, "id")
-                || !strcmp(data->key, "channel")) {
+                || !strcmp(data->key, "channel")
+                || !strcmp(data->key, "mic")) {
             str = mbuf_snprintf(buf, ",%s=", data->key);
             str++;
             end = &buf->buf[buf->len - 1];
@@ -329,7 +393,8 @@ static void print_influx_data(data_output_t *output, data_t *data, char const *f
         else if (!strcmp(data->key, "type")
                 || !strcmp(data->key, "subtype")
                 || !strcmp(data->key, "id")
-                || !strcmp(data->key, "channel")) {
+                || !strcmp(data->key, "channel")
+                || !strcmp(data->key, "mic")) {
             // skip
         }
         else {
@@ -338,7 +403,6 @@ static void print_influx_data(data_output_t *output, data_t *data, char const *f
                 str++;
             end = &buf->buf[buf->len - 1];
             influx_sanitize_tag(str, end);
-            str = end + 1;
             print_value(output, data->type, data->value, data->format);
             comma = true;
         }
@@ -374,7 +438,7 @@ static void print_influx_data(data_output_t *output, data_t *data, char const *f
     influx_client_send(influx);
 }
 
-static void print_influx_double(data_output_t *output, double data, char const *format)
+static void R_API_CALLCONV print_influx_double(data_output_t *output, double data, char const *format)
 {
     UNUSED(format);
     influx_client_t *influx = (influx_client_t *)output;
@@ -382,7 +446,7 @@ static void print_influx_double(data_output_t *output, double data, char const *
     mbuf_snprintf(buf, "%f", data);
 }
 
-static void print_influx_int(data_output_t *output, int data, char const *format)
+static void R_API_CALLCONV print_influx_int(data_output_t *output, int data, char const *format)
 {
     UNUSED(format);
     influx_client_t *influx = (influx_client_t *)output;
@@ -390,7 +454,7 @@ static void print_influx_int(data_output_t *output, int data, char const *format
     mbuf_snprintf(buf, "%d", data);
 }
 
-static void data_output_influx_free(data_output_t *output)
+static void R_API_CALLCONV data_output_influx_free(data_output_t *output)
 {
     influx_client_t *influx = (influx_client_t *)output;
 
@@ -424,6 +488,9 @@ struct data_output *data_output_influx_create(struct mg_mgr *mgr, char *opts)
     char *token = NULL;
 
     // param/opts starts with URL
+    if (!opts) {
+        opts = "";
+    }
     char *url = opts;
     opts = strchr(opts, ',');
     if (opts) {
@@ -434,14 +501,17 @@ struct data_output *data_output_influx_create(struct mg_mgr *mgr, char *opts)
         url += 2;
         memcpy(url, "http", 4);
     }
+    if (strncmp(url, "https", 5) == 0) {
+        influx->tls_opts.tls_ca_cert = "*"; // TLS is enabled but no cert verification is performed.
+    }
 
     // check if valid URL has been provided
     struct mg_str host, path, query;
     if (mg_parse_uri(mg_mk_str(url), NULL, NULL, &host, NULL, &path,
                 &query, NULL) != 0
             || !host.len || !path.len || !query.len) {
-        fprintf(stderr, "Invalid URL to InfluxDB specified.%s%s%s\n"
-                        "Something like \"influx://<host>/write?org=<org>&bucket=<bucket>\" required at least.\n",
+        print_logf(LOG_FATAL, __func__, "Invalid URL to InfluxDB specified.%s%s%s"
+                        " Something like \"influx://<host>/write?org=<org>&bucket=<bucket>\" required at least.",
                 !host.len ? " No host specified." : "",
                 !path.len ? " No path component specified." : "",
                 !query.len ? " No query parameters specified." : "");
@@ -457,8 +527,11 @@ struct data_output *data_output_influx_create(struct mg_mgr *mgr, char *opts)
             continue;
         else if (!strcasecmp(key, "t") || !strcasecmp(key, "token"))
             token = val;
+        else if (!tls_param(&influx->tls_opts, key, val)) {
+            // ok
+        }
         else {
-            fprintf(stderr, "Invalid key \"%s\" option.\n", key);
+            print_logf(LOG_FATAL, __func__, "Invalid key \"%s\" option.", key);
             exit(1);
         }
     }
@@ -470,10 +543,15 @@ struct data_output *data_output_influx_create(struct mg_mgr *mgr, char *opts)
     influx->output.print_int    = print_influx_int;
     influx->output.output_free  = data_output_influx_free;
 
-    fprintf(stderr, "Publishing data to InfluxDB (%s)\n", url);
+    print_logf(LOG_CRITICAL, "InfluxDB", "Publishing data to InfluxDB (%s)", url);
 
     influx->mgr = mgr;
+
+    // add dummy socket to receive timer events
+    struct mg_add_sock_opts timer_opts = {.user_data = influx};
+    influx->timer = mg_add_sock_opt(mgr, INVALID_SOCKET, influx_client_timer, timer_opts);
+
     influx_client_init(influx, url, token);
 
-    return &influx->output;
+    return (struct data_output *)influx;
 }

@@ -19,10 +19,23 @@
 
     Remove all other multiline (slash-star) comments.
     Use single-line (slash-slash) comments to annontate important lines if needed.
+
+    To use this:
+    - Copy this template to a new file
+    - Change at least `new_template` in the source
+    - Add to include/rtl_433_devices.h
+    - Run ./maintainer_update.py (needs a clean git stage or commit)
+
+    Note that for simple devices doorbell/PIR/remotes a flex conf (see conf dir) is preferred.
 */
+
+#include "decoder.h"
 
 /**
 (this is a markdown formatted section to describe the decoder)
+(the first line here should match the first documentation line of the file, e.g.)
+Template decoder for DEVICE, tested with BRAND, BRAND.
+
 (describe the modulation, timing, and transmission, e.g.)
 The device uses PPM encoding,
 - 0 is encoded as 40 us pulse and 132 us gap,
@@ -44,36 +57,8 @@ Data layout:
 - T: 16-bit little-endian Unknown, likely Temperature
 - C: 8 bit Checksum, CRC-8 truncated poly 0x07 init 0x00
 */
-
-#include "decoder.h"
-
-/*
- * Hypothetical template device
- *
- * Message is 68 bits long
- * Messages start with 0xAA
- * The message is repeated as 5 packets,
- * require at least 3 repeated packets.
- *
- */
-#define MYDEVICE_BITLEN      68
-#define MYDEVICE_STARTBYTE   0xAA
-#define MYDEVICE_MINREPEATS  3
-#define MYDEVICE_MSG_TYPE    0x10
-#define MYDEVICE_CRC_POLY    0x07
-#define MYDEVICE_CRC_INIT    0x00
-
 static int new_template_decode(r_device *decoder, bitbuffer_t *bitbuffer)
 {
-    data_t *data;
-    int r; // a row index
-    uint8_t *b; // bits of a row
-    int parity;
-    uint8_t r_crc, c_crc;
-    uint16_t sensor_id;
-    uint8_t msg_type;
-    int16_t value;
-
     /*
      * Early debugging aid to see demodulated bits in buffer and
      * to determine if your limit settings are matched and firing
@@ -82,9 +67,7 @@ static int new_template_decode(r_device *decoder, bitbuffer_t *bitbuffer)
      * 1. Enable with -vvv (debug decoders)
      * 2. Delete this block when your decoder is working
      */
-    //    if (decoder->verbose > 1) {
-    //        bitbuffer_printf(bitbuffer, "%s: ", __func__);
-    //    }
+    //    decoder_log_bitbuffer(decoder, 2, __func__, bitbuffer, "");
 
     /*
      * If you expect the bits flipped with respect to the demod
@@ -107,6 +90,8 @@ static int new_template_decode(r_device *decoder, bitbuffer_t *bitbuffer)
      * loop over all rows and collect or output data:
      */
 
+    uint8_t *b; // bits of a row
+    int r;
     for (r = 0; r < bitbuffer->num_rows; ++r) {
         b = bitbuffer->bb[r];
 
@@ -121,8 +106,13 @@ static int new_template_decode(r_device *decoder, bitbuffer_t *bitbuffer)
          * - Data integrity checks (CRC/Checksum/Parity)
          */
 
-        if (bitbuffer->bits_per_row[r] < MYDEVICE_BITLEN) {
-            continue;
+        // Message is expected to be 68 bits long
+        if (bitbuffer->bits_per_row[r] < 68) {
+            continue; // not enough bits
+        }
+
+        if (b[0] != 0x42) {
+            continue; // magic header not found
         }
 
         /*
@@ -135,9 +125,10 @@ static int new_template_decode(r_device *decoder, bitbuffer_t *bitbuffer)
      * find a suitable row:
      */
 
-    r = bitbuffer_find_repeated_row(bitbuffer, MYDEVICE_MINREPEATS, MYDEVICE_BITLEN);
-    if (r < 0 || bitbuffer->bits_per_row[r] > MYDEVICE_BITLEN + 16) {
-        return 0;
+    // The message is repeated as 5 packets, require at least 3 repeated packets of 68 bits.
+    r = bitbuffer_find_repeated_row(bitbuffer, 3, 68);
+    if (r < 0 || bitbuffer->bits_per_row[r] > 68 + 16) {
+        return DECODE_ABORT_LENGTH;
     }
 
     b = bitbuffer->bb[r];
@@ -146,8 +137,8 @@ static int new_template_decode(r_device *decoder, bitbuffer_t *bitbuffer)
      * Either reject rows that don't start with the correct start byte:
      * Example message should start with 0xAA
      */
-    if (b[0] != MYDEVICE_STARTBYTE) {
-        return 0;
+    if (b[0] != 0xaa) {
+        return DECODE_ABORT_EARLY; // Messages start of 0xAA not found
     }
 
     /*
@@ -172,29 +163,26 @@ static int new_template_decode(r_device *decoder, bitbuffer_t *bitbuffer)
      */
     // parity check: odd parity on bits [0 .. 67]
     // i.e. 8 bytes and a nibble.
+    int parity;
     parity = b[0] ^ b[1] ^ b[2] ^ b[3] ^ b[4] ^ b[5] ^ b[6] ^ b[7]; // parity as byte
-    parity = (parity >> 4) ^ (parity & 0xF); // fold to nibble
-    parity ^= b[8] >> 4; // add remaining nibble
-    parity = (parity >> 2) ^ (parity & 0x3); // fold to 2 bits
-    parity = (parity >> 1) ^ (parity & 0x1); // fold to 1 bit
+    parity = (parity >> 4) ^ (parity & 0xF);                        // fold to nibble
+    parity ^= b[8] >> 4;                                            // add remaining nibble
+    parity = (parity >> 2) ^ (parity & 0x3);                        // fold to 2 bits
+    parity = (parity >> 1) ^ (parity & 0x1);                        // fold to 1 bit
 
     if (!parity) {
-        //Enable with -vv (verbose decoders)
-        if (decoder->verbose) {
-            fprintf(stderr, "%s: parity check failed\n", __func__);
-        }
-        return 0;
+        // Enable with -vv (verbose decoders)
+        decoder_log(decoder, 1, __func__, "parity check failed");
+        return DECODE_FAIL_MIC;
     }
 
     /*
      * Check message integrity (Checksum example)
      */
     if (((b[0] + b[1] + b[2] + b[3] - b[4]) & 0xFF) != 0) {
-        //Enable with -vv (verbose decoders)
-        if (decoder->verbose) {
-            fprintf(stderr, "%s: checksum error\n", __func__);
-        }
-        return 0;
+        // Enable with -vv (verbose decoders)
+        decoder_log(decoder, 1, __func__, "checksum error");
+        return DECODE_FAIL_MIC;
     }
 
     /*
@@ -202,39 +190,37 @@ static int new_template_decode(r_device *decoder, bitbuffer_t *bitbuffer)
      *
      * Example device uses CRC-8
      */
-    r_crc = b[7];
-    c_crc = crc8(b, MYDEVICE_BITLEN / 8, MYDEVICE_CRC_POLY, MYDEVICE_CRC_INIT);
-    if (r_crc != c_crc) {
-        //Enable with -vv (verbose decoders)
-        if (decoder->verbose) {
-            fprintf(stderr, "%s: bad CRC: calculated %02x, received %02x\n",
-                    __func__, c_crc, r_crc);
-        }
+    // There are 6 data bytes and then a CRC8 byte
+    int chk = crc8(b, 7, 0x07, 0x00);
+    if (chk != 0) {
+        // Enable with -vv (verbose decoders)
+        decoder_log(decoder, 1, __func__, "bad CRC");
 
         // reject row
-        return 0;
+        return DECODE_FAIL_MIC;
     }
 
     /*
      * Now that message "envelope" has been validated,
      * start parsing data.
      */
-    msg_type = b[1];
-    sensor_id = b[2] << 8 | b[3];
-    value = b[4] << 8 | b[5];
+    int msg_type  = b[1];
+    int sensor_id = b[2] << 8 | b[3];
+    int value     = b[4] << 8 | b[5];
 
-    if (msg_type != MYDEVICE_MSG_TYPE) {
+    // A message type byte of 0x10 is expected
+    if (msg_type != 0x10) {
         /*
          * received an unexpected message type
          * could be a bad message or a new message not
          * previously seen.  Optionally log debug output.
          */
-        return 0;
+        return DECODE_FAIL_OTHER;
     }
 
     /* clang-format off */
-    data = data_make(
-            "model", "", DATA_STRING, "New Template",
+    data_t *data = data_make(
+            "model", "", DATA_STRING, "New-Template",
             "id",    "", DATA_INT,    sensor_id,
             "data",  "", DATA_INT,    value,
             "mic",   "", DATA_STRING, "CHECKSUM", // CRC, CHECKSUM, or PARITY
@@ -253,7 +239,7 @@ static int new_template_decode(r_device *decoder, bitbuffer_t *bitbuffer)
  * order for this device when using -F csv.
  *
  */
-static char *output_fields[] = {
+static char const *const output_fields[] = {
         "model",
         "id",
         "data",
@@ -274,7 +260,7 @@ static char *output_fields[] = {
  *
  * The function used to turn the received signal into bits.
  * See:
- * - pulse_demod.h for descriptions
+ * - pulse_slicer.h for descriptions
  * - r_device.h for the list of defined names
  *
  * This device is disabled and hidden, it can not be enabled.
@@ -283,7 +269,7 @@ static char *output_fields[] = {
  * and sort it into src/CMakeLists.txt or run ./maintainer_update.py
  *
  */
-r_device new_template = {
+r_device const new_template = {
         .name        = "Template decoder",
         .modulation  = OOK_PULSE_PPM,
         .short_width = 132,  // short gap is 132 us

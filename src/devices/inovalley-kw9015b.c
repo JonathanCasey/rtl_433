@@ -74,16 +74,17 @@ static int kw9015b_callback(r_device *decoder, bitbuffer_t *bitbuffer)
     return 1;
 }
 
-static char *kw9015b_csv_output_fields[] = {
+static char const *const kw9015b_csv_output_fields[] = {
         "model",
         "id",
+        "battery_ok",
         "temperature_C",
         "rain", // TODO: remove this
         "rain_mm",
         NULL,
 };
 
-r_device kw9015b = {
+r_device const kw9015b = {
         .name        = "Inovalley kw9015b, TFA Dostmann 30.3161 (Rain and temperature sensor)",
         .modulation  = OOK_PULSE_PPM,
         .short_width = 2000,

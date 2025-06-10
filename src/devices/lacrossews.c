@@ -77,12 +77,9 @@ static int lacrossews_detect(r_device *decoder, uint8_t *pRow, uint8_t *msg_nybb
             && checksum == msg_nybbles[12];
 
     if (!checksum_ok) {
-        if (decoder->verbose > 1) {
-            fprintf(stderr,
-                "LaCrosse Packet Validation Failed error: Checksum Comp. %d != Recv. %d, Parity %d\n",
+        decoder_logf_bitrow(decoder, 2, __func__, msg_nybbles, LACROSSE_WS_BITLEN,
+                "LaCrosse Packet Validation Failed error: Checksum Comp. %d != Recv. %d, Parity %d",
                 checksum, msg_nybbles[12], parity);
-            bitrow_print(msg_nybbles, LACROSSE_WS_BITLEN);
-        }
         return DECODE_FAIL_MIC;
     }
 
@@ -100,7 +97,7 @@ static int lacrossews_callback(r_device *decoder, bitbuffer_t *bitbuffer)
     float temp_c, wind_dir, wind_spd, rain_mm;
     data_t *data;
 
-    for (row = 0; row < BITBUF_ROWS; row++) {
+    for (row = 0; row < bitbuffer->num_rows; row++) {
         // break out the message nybbles into separate bytes
         if (lacrossews_detect(decoder, bitbuffer->bb[row], msg_nybbles, bitbuffer->bits_per_row[row]) <= 0)
             continue; // DECODE_ABORT_EARLY
@@ -119,9 +116,9 @@ static int lacrossews_callback(r_device *decoder, bitbuffer_t *bitbuffer)
 
         case 0: // Temperature
             if (ws_id == 0x6)
-                temp_c = (msg_value_bcd - 400.0) * 0.1f;
+                temp_c = (msg_value_bcd - 400) * 0.1f;
             else
-                temp_c = (msg_value_bcd - 300.0) * 0.1f;
+                temp_c = (msg_value_bcd - 300) * 0.1f;
 
             /* clang-format off */
             data = data_make(
@@ -137,8 +134,7 @@ static int lacrossews_callback(r_device *decoder, bitbuffer_t *bitbuffer)
 
         case 1: // Humidity
             if (msg_nybbles[7] == 0xA && msg_nybbles[8] == 0xA) {
-                if (decoder->verbose)
-                    fprintf(stderr, "LaCrosse WS %02X-%02X: Humidity Error\n",
+                decoder_logf(decoder, 1, __func__, "LaCrosse WS %02X-%02X: Humidity Error",
                             ws_id, sensor_id);
                 break;
             }
@@ -156,13 +152,13 @@ static int lacrossews_callback(r_device *decoder, bitbuffer_t *bitbuffer)
             break;
 
         case 2: // Rain
-            rain_mm = 0.5180 * msg_value_bin;
+            rain_mm = 0.5180f * msg_value_bin;
 
             /* clang-format off */
             data = data_make(
                     "model",            "",             DATA_STRING, ws_id == 0x6 ? "LaCrosse-WS3600" : "LaCrosse-WS2310",
                     "id",               "",             DATA_INT,    sensor_id,
-                    "rain_mm",          "Rainfall",     DATA_FORMAT, "%3.2f mm", DATA_DOUBLE, rain_mm,
+                    "rain_mm",          "Rainfall",     DATA_FORMAT, "%.2f mm", DATA_DOUBLE, rain_mm,
                     NULL);
             /* clang-format on */
 
@@ -173,13 +169,11 @@ static int lacrossews_callback(r_device *decoder, bitbuffer_t *bitbuffer)
         case 3: // Wind
 
         case 7: // Gust
-            wind_dir = msg_nybbles[9] * 22.5;
+            wind_dir = msg_nybbles[9] * 22.5f;
             wind_spd = (msg_nybbles[7] * 16 + msg_nybbles[8]) * 0.1f;
             if (msg_nybbles[7] == 0xF && msg_nybbles[8] == 0xE) {
-                if (decoder->verbose) {
-                    fprintf(stderr, "LaCrosse WS %02X-%02X: %s Not Connected\n",
-                            ws_id, sensor_id, msg_type == 3 ? "Wind" : "Gust");
-                }
+                decoder_logf(decoder, 1, __func__, "WS %02X-%02X: %s Not Connected",
+                        ws_id, sensor_id, msg_type == 3 ? "Wind" : "Gust");
                 break;
             }
 
@@ -187,9 +181,10 @@ static int lacrossews_callback(r_device *decoder, bitbuffer_t *bitbuffer)
             data = data_make(
                     "model",            "",             DATA_STRING, ws_id == 0x6 ? "LaCrosse-WS3600" : "LaCrosse-WS2310",
                     "id",               "",             DATA_INT,    sensor_id,
-                    "wind_avg_m_s",     "Wind speed",   DATA_COND,   msg_type == 3, DATA_FORMAT, "%3.1f m/s", DATA_DOUBLE, wind_spd,
-                    "wind_max_m_s",     "Gust speed",   DATA_COND,   msg_type != 3, DATA_FORMAT, "%3.1f m/s", DATA_DOUBLE, wind_spd,
-                    "wind_dir_deg",     "Direction",    DATA_DOUBLE, wind_dir, NULL);
+                    "wind_avg_m_s",     "Wind speed",   DATA_COND,   msg_type == 3, DATA_FORMAT, "%.1f m/s", DATA_DOUBLE, wind_spd,
+                    "wind_max_m_s",     "Gust speed",   DATA_COND,   msg_type != 3, DATA_FORMAT, "%.1f m/s", DATA_DOUBLE, wind_spd,
+                    "wind_dir_deg",     "Direction",    DATA_DOUBLE, wind_dir,
+                    NULL);
             /* clang-format on */
 
             decoder_output_data(decoder, data);
@@ -197,11 +192,9 @@ static int lacrossews_callback(r_device *decoder, bitbuffer_t *bitbuffer)
             break;
 
         default:
-            if (decoder->verbose) {
-                fprintf(stderr,
-                        "LaCrosse WS %02X-%02X: Unknown data type %d, bcd %d bin %d\n",
-                        ws_id, sensor_id, msg_type, msg_value_bcd, msg_value_bin);
-            }
+            decoder_logf(decoder, 1, __func__,
+                    "WS %02X-%02X: Unknown data type %d, bcd %d bin %d\n",
+                    ws_id, sensor_id, msg_type, msg_value_bcd, msg_value_bin);
             events++;
         }
     }
@@ -209,7 +202,7 @@ static int lacrossews_callback(r_device *decoder, bitbuffer_t *bitbuffer)
     return events;
 }
 
-static char *output_fields[] = {
+static char const *const output_fields[] = {
         "model",
         "id",
         "temperature_C",
@@ -221,13 +214,12 @@ static char *output_fields[] = {
         NULL,
 };
 
-r_device lacrossews = {
+r_device const lacrossews = {
         .name        = "LaCrosse WS-2310 / WS-3600 Weather Station",
         .modulation  = OOK_PULSE_PWM,
         .short_width = 368,
         .long_width  = 1464,
         .reset_limit = 8000,
         .decode_fn   = &lacrossews_callback,
-        .disabled    = 0,
         .fields      = output_fields,
 };
