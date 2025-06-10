@@ -86,7 +86,7 @@ double arg_float(char const *str, char const *error_hint);
 /// also "//localhost", "//localhost:514", "//:514".
 /// Host or port are terminated at a comma, if found.
 /// @return the remaining options
-char *hostport_param(char *param, char **host, char **port);
+char *hostport_param(char *param, char const **host, char const **port);
 
 /// Convert a string to an unsigned integer, uses strtod() and accepts
 /// metric suffixes of 'k', 'M', and 'G' (also 'K', 'm', and 'g').
@@ -106,7 +106,7 @@ uint32_t atouint32_metric(char const *str, char const *error_hint);
 ///
 /// @param str character string to parse
 /// @param error_hint prepended to error output
-/// @return parsed number value
+/// @return parsed number value in seconds
 int atoi_time(char const *str, char const *error_hint);
 
 /// Similar to strsep.
@@ -123,6 +123,20 @@ char *asepc(char **stringp, char delim);
 /// @param stop the bounding character at which to stop
 /// @return the original value of *stringp
 char *asepcb(char **stringp, char delim, char stop);
+
+/// Match the first key in a comma-separated list of key/value pairs.
+///
+/// @param s String of key=value pairs, separated by commas
+/// @param key keyword argument to match with
+/// @param[out] val value if found, NULL otherwise
+/// @return 1 if the key matches exactly, 0 otherwise
+int kwargs_match(char const *s, char const *key, char const **val);
+
+/// Skip the first key/value in a comma-separated list of key/value pairs.
+///
+/// @param s String of key=value pairs, separated by commas
+/// @return the next key in s, end of string or NULL otherwise
+char const *kwargs_skip(char const *s);
 
 /// Parse a comma-separated list of key/value pairs into kwargs.
 ///

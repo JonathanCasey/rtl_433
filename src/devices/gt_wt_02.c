@@ -1,7 +1,8 @@
 /** @file
     GT-WT-02 sensor on 433.92MHz.
 
-    Copyright (C) 2015 Paul Ortyl
+    Copyright (C) 2019 Christian W. Zuckschwerdt <zany@triq.net>
+    original implementation 2015 Paul Ortyl
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -93,7 +94,7 @@ static int gt_wt_02_process_row(r_device *decoder, bitbuffer_t *bitbuffer, int r
             "id",               "ID Code",      DATA_INT,    sensor_id,
             "channel",          "Channel",      DATA_INT,    channel + 1,
             "battery_ok",       "Battery",      DATA_INT,    !battery_low,
-            "temperature_C",    "Temperature",  DATA_FORMAT, "%.01f C", DATA_DOUBLE, temp_c,
+            "temperature_C",    "Temperature",  DATA_FORMAT, "%.1f C", DATA_DOUBLE, temp_c,
             "humidity",         "Humidity",     DATA_FORMAT, "%.0f %%", DATA_DOUBLE, (double)humidity,
             "button",           "Button ",      DATA_INT,    button_pressed,
             "mic",              "Integrity",    DATA_STRING, "CHECKSUM",
@@ -114,7 +115,7 @@ static int gt_wt_02_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     return counter;
 }
 
-static char *output_fields[] = {
+static char const *const output_fields[] = {
         "model",
         "id",
         "channel",
@@ -126,7 +127,7 @@ static char *output_fields[] = {
         NULL,
 };
 
-r_device gt_wt_02 = {
+r_device const gt_wt_02 = {
         .name        = "Globaltronics GT-WT-02 Sensor",
         .modulation  = OOK_PULSE_PPM,
         .short_width = 2500, // 3ms (old) / 2ms (new)
@@ -134,6 +135,5 @@ r_device gt_wt_02 = {
         .gap_limit   = 8000, // 10ms (old) / 9ms (new) sync gap
         .reset_limit = 12000,
         .decode_fn   = &gt_wt_02_decode,
-        .disabled    = 0,
         .fields      = output_fields,
 };

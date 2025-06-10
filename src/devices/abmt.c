@@ -32,7 +32,7 @@ F - ones
 // Convert two BCD encoded nibbles to an integer
 static unsigned bcd2int(uint8_t bcd)
 {
-    return 10*(bcd>>4) + (bcd & 0xF);
+    return 10 * (bcd >> 4) + (bcd & 0xF);
 }
 
 static int abmt_callback(r_device *decoder, bitbuffer_t *bitbuffer)
@@ -41,7 +41,6 @@ static int abmt_callback(r_device *decoder, bitbuffer_t *bitbuffer)
     float temp_c;
     bitbuffer_t packet_bits = {0};
     unsigned int id;
-    data_t *data;
     unsigned bitpos = 0;
     uint8_t *b;
     int16_t temp;
@@ -62,40 +61,39 @@ static int abmt_callback(r_device *decoder, bitbuffer_t *bitbuffer)
         return DECODE_FAIL_SANITY;
 
     // sync bitstream
-    bitbuffer_manchester_decode(bitbuffer, row, bitpos-SYNC_PATTERN_START_OFF, &packet_bits, 48);
+    bitbuffer_manchester_decode(bitbuffer, row, bitpos - SYNC_PATTERN_START_OFF, &packet_bits, 48);
     bitbuffer_invert(&packet_bits);
 
-    b = packet_bits.bb[0];
-    id = b[0];
-    temp = bcd2int(b[3])*10 + bcd2int(b[4]>>4);
+    b      = packet_bits.bb[0];
+    id     = b[0];
+    temp   = bcd2int(b[3]) * 10 + bcd2int(b[4] >> 4);
     temp_c = (float)temp;
 
     /* clang-format off */
-     data = data_make(
+    data_t *data = data_make(
              "model",         "",            DATA_STRING, "Basics-Meat",
              "id",            "Id",          DATA_INT,    id,
-             "temperature_C", "Temperature", DATA_FORMAT, "%.01f C", DATA_DOUBLE, temp_c,
+             "temperature_C", "Temperature", DATA_FORMAT, "%.1f C", DATA_DOUBLE, temp_c,
              NULL);
     /* clang-format on */
     decoder_output_data(decoder, data);
     return 1;
 }
 
-static char *output_fields[] = {
+static char const *const output_fields[] = {
         "model",
         "id",
         "temperature_C",
         NULL,
 };
 
-r_device abmt = {
+r_device const abmt = {
         .name        = "Amazon Basics Meat Thermometer",
-        .modulation  = OOK_PULSE_PCM_RZ,
+        .modulation  = OOK_PULSE_PCM,
         .short_width = 550,
         .long_width  = 550,
         .gap_limit   = 2000,
         .reset_limit = 5000,
         .decode_fn   = &abmt_callback,
-        .disabled    = 0,
         .fields      = output_fields,
 };
