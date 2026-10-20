@@ -19,6 +19,7 @@
 #include <signal.h>
 #include "sdr.h"
 #include "r_util.h"
+#include "abuf.h"
 #include "optparse.h"
 #include "logger.h"
 #include "fatal.h"
@@ -137,7 +138,7 @@ static int rtltcp_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
     char const *port = "1234";
     char hostport[280]; // 253 chars DNS name plus extra chars
 
-    char *param = arg_param(dev_query); // strip scheme
+    char const *param = arg_param(dev_query); // strip scheme
     hostport[0] = '\0';
     if (param) {
         snprintf(hostport, sizeof(hostport), "%s", param);
@@ -174,7 +175,7 @@ static int rtltcp_open(sdr_dev_t **out_dev, char const *dev_query, int verbose)
     for (res = res0; res; res = res->ai_next) {
         sock = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
         if (sock >= 0) {
-            ret = connect(sock, res->ai_addr, res->ai_addrlen);
+            ret = connect(sock, res->ai_addr, (int)res->ai_addrlen);
             if (ret == -1) {
                 perror("connect");
                 closesocket(sock);
@@ -782,89 +783,102 @@ static void soapysdr_show_device_info(SoapySDRDevice *dev)
     int direction = SOAPY_SDR_RX;
     size_t channel = 0;
 
+    // buffer sized for one line of log output
+    char message[256];
+    abuf_t msg = {0};
+
+    abuf_init(&msg, message, sizeof(message));
     hwkey = SoapySDRDevice_getHardwareKey(dev);
-    fprintf(stderr, "Using device %s: ", hwkey);
+    abuf_printf(&msg, "Using device %s: ", hwkey);
     SoapySDR_free(hwkey);
 
     args = SoapySDRDevice_getHardwareInfo(dev);
     for (i = 0; i < args.size; ++i) {
-        fprintf(stderr, "%s=%s ", args.keys[i], args.vals[i]);
+        abuf_printf(&msg, "%s=%s ", args.keys[i], args.vals[i]);
     }
-    fprintf(stderr, "\n");
     SoapySDRKwargs_clear(&args);
+    print_log(LOG_NOTICE, "SoapySDR", message);
 
+    abuf_init(&msg, message, sizeof(message));
     antennas = SoapySDRDevice_listAntennas(dev, direction, channel, &len);
-    fprintf(stderr, "Found %zu antenna(s): ", len);
+    abuf_printf(&msg, "Found %zu antenna(s): ", len);
     for (i = 0; i < len; ++i) {
-        fprintf(stderr, "%s ", antennas[i]);
+        abuf_printf(&msg, "%s ", antennas[i]);
     }
-    fprintf(stderr, "\n");
     SoapySDRStrings_clear(&antennas, len);
+    print_log(LOG_NOTICE, "SoapySDR", message);
 
+    abuf_init(&msg, message, sizeof(message));
     gains = SoapySDRDevice_listGains(dev, direction, channel, &len);
-    fprintf(stderr, "Found %zu gain(s): ", len);
+    abuf_printf(&msg, "Found %zu gain(s): ", len);
     for (i = 0; i < len; ++i) {
         SoapySDRRange gainRange = SoapySDRDevice_getGainRange(dev, direction, channel);
-        fprintf(stderr, "%s %.0f - %.0f (step %.0f) ", gains[i], gainRange.minimum, gainRange.maximum, gainRange.step);
+        abuf_printf(&msg, "%s %.0f - %.0f (step %.0f) ", gains[i], gainRange.minimum, gainRange.maximum, gainRange.step);
     }
-    fprintf(stderr, "\n");
     SoapySDRStrings_clear(&gains, len);
+    print_log(LOG_NOTICE, "SoapySDR", message);
 
+    abuf_init(&msg, message, sizeof(message));
     frequencies = SoapySDRDevice_listFrequencies(dev, direction, channel, &len);
-    fprintf(stderr, "Found %zu frequencies: ", len);
+    abuf_printf(&msg, "Found %zu frequencies: ", len);
     for (i = 0; i < len; ++i) {
-        fprintf(stderr, "%s ", frequencies[i]);
+        abuf_printf(&msg, "%s ", frequencies[i]);
     }
-    fprintf(stderr, "\n");
     SoapySDRStrings_clear(&frequencies, len);
+    print_log(LOG_NOTICE, "SoapySDR", message);
 
+    abuf_init(&msg, message, sizeof(message));
     frequencyRanges = SoapySDRDevice_getFrequencyRange(dev, direction, channel, &len);
-    fprintf(stderr, "Found %zu frequency range(s): ", len);
+    abuf_printf(&msg, "Found %zu frequency range(s): ", len);
     for (i = 0; i < len; ++i) {
-        fprintf(stderr, "%.0f - %.0f (step %.0f) ", frequencyRanges[i].minimum, frequencyRanges[i].maximum, frequencyRanges[i].step);
+        abuf_printf(&msg, "%.0f - %.0f (step %.0f) ", frequencyRanges[i].minimum, frequencyRanges[i].maximum, frequencyRanges[i].step);
     }
-    fprintf(stderr, "\n");
     SoapySDR_free(frequencyRanges);
+    print_log(LOG_NOTICE, "SoapySDR", message);
 
+    abuf_init(&msg, message, sizeof(message));
     rates = SoapySDRDevice_getSampleRateRange(dev, direction, channel, &len);
-    fprintf(stderr, "Found %zu sample rate range(s): ", len);
+    abuf_printf(&msg, "Found %zu sample rate range(s): ", len);
     for (i = 0; i < len; ++i) {
         if (rates[i].minimum == rates[i].maximum)
-            fprintf(stderr, "%.0f ", rates[i].minimum);
+            abuf_printf(&msg, "%.0f ", rates[i].minimum);
         else
-            fprintf(stderr, "%.0f - %.0f (step %.0f) ", rates[i].minimum, rates[i].maximum, rates[i].step);
+            abuf_printf(&msg, "%.0f - %.0f (step %.0f) ", rates[i].minimum, rates[i].maximum, rates[i].step);
     }
-    fprintf(stderr, "\n");
     SoapySDR_free(rates);
+    print_log(LOG_NOTICE, "SoapySDR", message);
 
+    abuf_init(&msg, message, sizeof(message));
     bandwidths = SoapySDRDevice_getBandwidthRange(dev, direction, channel, &len);
-    fprintf(stderr, "Found %zu bandwidth range(s): ", len);
+    abuf_printf(&msg, "Found %zu bandwidth range(s): ", len);
     for (i = 0; i < len; ++i) {
-        fprintf(stderr, "%.0f - %.0f (step %.0f) ", bandwidths[i].minimum, bandwidths[i].maximum, bandwidths[i].step);
+        abuf_printf(&msg, "%.0f - %.0f (step %.0f) ", bandwidths[i].minimum, bandwidths[i].maximum, bandwidths[i].step);
     }
-    fprintf(stderr, "\n");
     SoapySDR_free(bandwidths);
+    print_log(LOG_NOTICE, "SoapySDR", message);
 
     double bandwidth = SoapySDRDevice_getBandwidth(dev, direction, channel);
-    fprintf(stderr, "Found current bandwidth %.0f\n", bandwidth);
+    print_logf(LOG_NOTICE, "SoapySDR", "Found current bandwidth: %.0f", bandwidth);
 
+    abuf_init(&msg, message, sizeof(message));
     stream_formats = SoapySDRDevice_getStreamFormats(dev, direction, channel, &len);
-    fprintf(stderr, "Found %zu stream format(s): ", len);
+    abuf_printf(&msg, "Found %zu stream format(s): ", len);
     for (i = 0; i < len; ++i) {
-        fprintf(stderr, "%s ", stream_formats[i]);
+        abuf_printf(&msg, "%s ", stream_formats[i]);
     }
-    fprintf(stderr, "\n");
     SoapySDRStrings_clear(&stream_formats, len);
+    print_log(LOG_NOTICE, "SoapySDR", message);
 
     native_stream_format = SoapySDRDevice_getNativeStreamFormat(dev, direction, channel, &fullScale);
-    fprintf(stderr, "Found native stream format: %s (full scale: %.1f)\n", native_stream_format, fullScale);
+    print_logf(LOG_NOTICE, "SoapySDR", "Found native stream format: %s (full scale: %.1f)", native_stream_format, fullScale);
     SoapySDR_free(native_stream_format);
 }
 
 static int sdr_open_soapy(sdr_dev_t **out_dev, char const *dev_query, int verbose)
 {
-    if (verbose)
+    if (verbose) {
         SoapySDR_setLogLevel(SOAPY_SDR_DEBUG);
+    }
 
     sdr_dev_t *dev = calloc(1, sizeof(sdr_dev_t));
     if (!dev) {
@@ -883,41 +897,75 @@ static int sdr_open_soapy(sdr_dev_t **out_dev, char const *dev_query, int verbos
         return -1;
     }
 
-    if (verbose)
+    if (verbose) {
         soapysdr_show_device_info(dev->soapy_dev);
+    }
+
+    // Check supported formats
+    int supports_cs16 = 0;
+    int supports_cf32 = 0;
+    size_t len = 0;
+    char **stream_formats = SoapySDRDevice_getStreamFormats(dev->soapy_dev, SOAPY_SDR_RX, 0, &len);
+    for (size_t i = 0; i < len; ++i) {
+        if (!strcmp(SOAPY_SDR_CS16, stream_formats[i])) {
+            supports_cs16 = 1;
+        }
+        if (!strcmp(SOAPY_SDR_CF32, stream_formats[i])) {
+            supports_cf32 = 1;
+        }
+    }
+    SoapySDRStrings_clear(&stream_formats, len);
 
     // select a stream format, in preference order: native CU8, CS8, CS16, forced CS16
     // stream_formats = SoapySDRDevice_getStreamFormats(dev->soapy_dev, SOAPY_SDR_RX, 0, &len);
     char *native_format = SoapySDRDevice_getNativeStreamFormat(dev->soapy_dev, SOAPY_SDR_RX, 0, &dev->fullScale);
+    int native_cu8 = !strcmp(SOAPY_SDR_CU8, native_format);
+    // int native_cs8 = !strcmp(SOAPY_SDR_CS8, native_format);
+    int native_cs16 = !strcmp(SOAPY_SDR_CS16, native_format);
+    SoapySDR_free(native_format);
+
     char const *selected_format;
-    if (!strcmp(SOAPY_SDR_CU8, native_format)) {
+    if (native_cu8) {
         // actually not supported by SoapySDR
         selected_format = SOAPY_SDR_CU8;
-        dev->sample_size = sizeof(uint8_t); // CU8
+        dev->sample_size = sizeof(uint8_t) * 2; // CU8
         dev->sample_signed = 0;
     }
-//    else if (!strcmp(SOAPY_SDR_CS8, native_format)) {
+//    else if (native_cs8) {
 //        // TODO: CS8 needs conversion to CU8
 //        // e.g. RTL-SDR (8 bit), scale is 128.0
 //        selected_format = SOAPY_SDR_CS8;
 //        dev->sample_size = sizeof(int8_t) * 2; // CS8
 //        dev->sample_signed = 1;
 //    }
-    else if (!strcmp(SOAPY_SDR_CS16, native_format)) {
+    else if (native_cs16) {
         // e.g. LimeSDR-mini (12 bit), native scale is 2048.0
         // e.g. SDRplay RSP1A (14 bit), native scale is 32767.0
         selected_format = SOAPY_SDR_CS16;
         dev->sample_size = sizeof(int16_t) * 2; // CS16
         dev->sample_signed = 1;
     }
-    else {
+    else if (supports_cs16) {
         // force CS16
         selected_format = SOAPY_SDR_CS16;
         dev->sample_size = sizeof(int16_t) * 2; // CS16
         dev->sample_signed = 1;
         dev->fullScale = 32768.0; // assume max for SOAPY_SDR_CS16
     }
-    SoapySDR_free(native_format);
+    else if (supports_cf32) {
+        // native CF32 or forced CF32, e.g. RedPitaya
+        selected_format    = SOAPY_SDR_CF32;
+        dev->sample_size   = sizeof(float) * 2; // CF32
+        dev->sample_signed = 1;
+        dev->fullScale     = 1.0;
+    }
+    else {
+        // No supported sample formats, log and abort
+        print_log(LOG_ERROR, __func__, "No supported sample formats for sdr device");
+        free(dev);
+        return -3;
+    }
+    print_logf(LOG_NOTICE, "SoapySDR", "Using stream format: %s (scale %.1f)", selected_format, dev->fullScale);
 
     SoapySDRKwargs args = SoapySDRDevice_getHardwareInfo(dev->soapy_dev);
     size_t info_len     = 2;
@@ -925,8 +973,9 @@ static int sdr_open_soapy(sdr_dev_t **out_dev, char const *dev_query, int verbos
         info_len += strlen(args.keys[i]) + strlen(args.vals[i]) + 6;
     }
     char *p = dev->dev_info = malloc(info_len);
-    if (!dev->dev_info)
+    if (!dev->dev_info) {
         FATAL_MALLOC("sdr_open_soapy");
+    }
     for (size_t i = 0; i < args.size; ++i) {
         p += sprintf(p, "%s\"%s\":\"%s\"", i ? "," : "{", args.keys[i], args.vals[i]);
     }
@@ -945,8 +994,9 @@ static int sdr_open_soapy(sdr_dev_t **out_dev, char const *dev_query, int verbos
     r = SoapySDRDevice_setupStream(dev->soapy_dev, &dev->soapy_stream, SOAPY_SDR_RX, selected_format, NULL, 0, &stream_args);
 #endif
     if (r != 0) {
-        if (verbose)
+        if (verbose) {
             print_log(LOG_ERROR, __func__, "Failed to setup sdr device");
+        }
         free(dev->dev_info);
         free(dev);
         return -3;
@@ -958,6 +1008,7 @@ static int sdr_open_soapy(sdr_dev_t **out_dev, char const *dev_query, int verbos
 
 // the buffer sizes can't be proven to be correct
 #pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpragmas"
 #pragma GCC diagnostic ignored "-Wunknown-warning-option"
 #pragma GCC diagnostic ignored "-Wanalyzer-allocation-size"
 
@@ -1009,10 +1060,29 @@ static int soapysdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint
             print_logf(LOG_WARNING, __func__, "sync read failed. %d", r);
         }
 
+        int output_sample_size = dev->sample_size; // default is to copy samples as-is
         // convert to CS16 or CU8 if needed
         // if converting CS8 to CU8 -- vectorized with -O3
         //for (i = 0; i < n_read * 2; ++i)
         //    cu8buf[i] = (int8_t)cu8buf[i] + 128;
+        if (dev->sample_size == sizeof(float) * 2) {
+            // Convert CF32 buffer to CS16 buffer
+            float const *cf32_buffer = (void *)buffer;
+
+            // clamp float to [-1,1] and scale to Q0.15
+            for (i = 0; i < n_read * 2; ++i) {
+                int s_tmp = cf32_buffer[i] * INT16_MAX;
+                if (s_tmp < -INT16_MAX) {
+                    s_tmp = -INT16_MAX;
+                }
+                else if (s_tmp > INT16_MAX) {
+                    s_tmp = INT16_MAX;
+                }
+                buffer[i] = s_tmp;
+            }
+
+            output_sample_size = sizeof(int16_t) * 2; // CS16
+        }
 
         // TODO: SoapyRemote doesn't scale properly when reading (local) CS16 from (remote) CS8
         // rescale cs16 buffer
@@ -1020,7 +1090,7 @@ static int soapysdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint
             for (i = 0; i < n_read * 2; ++i)
                 buffer[i] *= 16; // prevent left shift of negative value
         }
-        else if (dev->fullScale < 32767.0) {
+        else if (dev->fullScale > 1.0 && dev->fullScale < 32767.0) {
             int upscale = 32768 / dev->fullScale;
             for (i = 0; i < n_read * 2; ++i)
                 buffer[i] *= upscale;
@@ -1039,7 +1109,7 @@ static int soapysdr_read_loop(sdr_dev_t *dev, sdr_event_cb_t cb, void *ctx, uint
                 .sample_rate      = sample_rate,
                 .center_frequency = center_frequency,
                 .buf              = buffer,
-                .len              = n_read * dev->sample_size,
+                .len              = n_read * output_sample_size,
         };
 #ifdef THREADS
         pthread_mutex_lock(&dev->lock);

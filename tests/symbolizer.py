@@ -85,6 +85,7 @@ def process_source(path, name):
         fileDoc = False
         dLine = None
         dSee = None
+        dSee2 = None
         doc = None
         for i, line in enumerate(f):
             # look for documentation comments:
@@ -109,9 +110,12 @@ def process_source(path, name):
                 continue
             if captureDoc:
                 doc += line
-                m = re.match(r'\s*\@sa\s+(.*?)\(\)\s*', line)
+                # TODO: we should use a list
+                m = re.match(r'\s*\@sa\s+(.*?)\(\)\s*(?:(.*?)\(\))?', line)
                 if m:
                     dSee = m.group(1)
+                    if m.group(2):
+                        dSee2 = m.group(2)
                 continue
             # inline link /** @sa func() */
             m = re.match(r'\s*/\*\*\s*\@sa\s+(.*?)\(\)\s*\*/', line)
@@ -236,10 +240,88 @@ def process_source(path, name):
                 if dSee:
                     links[fName].update({"doc_line": dLine, "doc_see": dSee})
                     dSee = None
+                if dSee2:
+                    links[fName].update({"doc_line": dLine, "doc_see2": dSee2})
+                    dSee2 = None
                 if doc:
                     links[fName].update({"doc_line": dLine, "doc": doc})
                     doc = None
                 continue
+
+            # Match the data outputs
+            # "volume_m3", "Volume", DATA_COND, foo, DATA_FORMAT, "%.1f m3", DATA_DOUBLE, wread,
+            # DATA_DATA | DATA_INT | DATA_DOUBLE | DATA_STRING | DATA_ARRAY
+            # data_int | data_dbl | data_str | data_ary | data_dat | data_hex
+            if re.match(r'\s*//*', line):
+                # skip comment
+                pass
+            elif fName and re.match(r'.*\b(?:data_int|data_dbl|data_str|data_ary|data_dat|data_hex)\(.*', line):
+                m = re.match(r'.*\bdata_(int|dbl|str|ary|dat|hex)\([^,]*,\s*([^,]*)\s*,\s*"([^"]*)"\s*,\s*(?:NULL|"([^"]*)")\s*,\s*(?:"([^"]*)")?.*\);.*', line)
+                if m:
+                    # type, subtype, and model should be fixed string values
+                    d_type = m.group(1)
+                    d_qkey = m.group(2)
+                    d_key = d_qkey.strip('\"')
+                    d_pretty = m.group(3)
+                    d_cond = None
+                    d_format = m.group(4)
+                    d_value = m.group(5)
+                    if d_key == d_qkey:
+                        d_key = '$' + d_qkey
+                    if d_key == 'type' or d_key == 'model':
+                        if d_type != 'str' or d_value is None:
+                            log(f"::notice file={name},line={i + 1}::DATA line bad format")
+
+                    if "outputs" not in links[fName]:
+                        links[fName]["outputs"] = []
+
+                    links[fName]["outputs"].append({
+                        "type": d_type,
+                        "key": d_key,
+                        "pretty": d_pretty,
+                        "cond": d_cond,
+                        "format": d_format,
+                        "value": d_value, # capture value for "model"
+                    })
+                else:
+                    # Complain if a line could not be parsed
+                    log(f"::notice file={name},line={i + 1}::DATA line did not parse")
+            elif re.match(r'.*\b(DATA_COND|DATA_FORMAT|DATA_DATA|DATA_INT|DATA_DOUBLE|DATA_STRING|DATA_ARRAY)\b.*', line):
+                typemap = {
+                    "DATA_DATA": "dat",
+                    "DATA_INT": "int",
+                    "DATA_DOUBLE": "dbl",
+                    "DATA_STRING": "str",
+                    "DATA_ARRAY": "ary",
+                }
+                m = re.match(r'\s*"(.*?)"\s*,\s*"(.*?)"\s*,\s*(?:DATA_COND\s*,\s*(.*?)\s*,\s*)?(?:DATA_FORMAT\s*,\s*(.*?)\s*,\s*)?(DATA_DATA|DATA_INT|DATA_DOUBLE|DATA_STRING|DATA_ARRAY)\s*,\s*(?:"(.*?)")?.*', line)
+                if m:
+                    # type, subtype, and model should be fixed string values
+                    d_key = m.group(1)
+                    d_pretty = m.group(2)
+                    d_cond = m.group(3)
+                    d_format = m.group(4)
+                    d_type = typemap[m.group(5)]
+                    d_value = m.group(6)
+                    if d_key == 'type' or d_key == 'model':
+                        if d_type != 'str' or d_value is None:
+                            log(f"::notice file={name},line={i + 1}::DATA line bad format")
+
+                    if "outputs" not in links[fName]:
+                        links[fName]["outputs"] = []
+
+                    links[fName]["outputs"].append({
+                        "key": d_key,
+                        "pretty": d_pretty,
+                        "cond": d_cond,
+                        "format": d_format,
+                        "type": d_type,
+                        "value": d_value, # capture value for "model"
+                    })
+                else:
+                    # Complain if a line could not be parsed
+                    log(f"::notice file={name},line={i + 1}::DATA line did not parse")
+
             # Match the prefix string up to "TheModelName"
             # "model", "", DATA_STRING, "Schrader",
             m = re.match(r'\s*"model"\s*,.*DATA_STRING', line)
@@ -255,10 +337,12 @@ def process_source(path, name):
                 if not fName:
                     err(f"::error file={name},line={i + 1}::No func")
                 for model in models:
-                    if not re.match(r'^[A-Za-z][0-9A-Za-z"]+(-[0-9A-Za-z"]+)?$', model):
-                        log(f"::error file={name},line={i + 1}::Bad model name \"{model}\"")
+                    if not re.match(r'^[A-Za-z][0-9A-Za-z]+(-[0-9A-Za-z]+)?$', model):
+                        log(f"::error file={name},line={i + 1}::Bad model \"{model}\"")
                     if model in links and links[model]["func"] != fName:
-                        log(f"::notice file={name},line={i + 1}::Reused model")
+                        log(f"::notice file={name},line={i + 1}::Reused model \"{model}\"")
+                        # print(links[model], file=sys.stderr)
+                        # print({"src": name, "line": i + 1, "type": "model", "func": fName}, file=sys.stderr)
                     elif model in links:
                         log(f"::notice file={name},line={i + 1}::Duplicate model")
                     links[model] = {"src": name, "line": i + 1, "type": "model", "func": fName}

@@ -13,7 +13,7 @@
 #include "decoder.h"
 
 /**
-BlueLine Innovations Power Cost Monitor, tested with BLI-28000.
+BlueLine Innovations Power Cost Monitor, tested with BLI-28000 and Black & Decker EM100B.
 
 Much of the groundwork for this implementation was based on reading the source and notes from older
 implementations, but this implementation was a fresh rewrite by Justin Brzozoski in 2020.  I would
@@ -89,7 +89,9 @@ degrees celsius automatically.
 For the energy message (3), the offset payload contains a continuously running power impulse accumulator. I'm
 not sure if there is a way to reset the accumulator.  The intended way to use it is to remember the accumulator
 value at the beginning of a time period, and then subtract that from the value at the end of the time period.  The
-accumulator will roll over to 0 after 65535.
+accumulator will roll over to 0 after 65535.  The two lowest bits are overlaid by the message type, so the count
+only advances in steps of 4 (the monitor reports every 4th impulse, see #2008), giving an energy resolution of
+4 * Kh Wh.
 
     kWh = 0.001 * (accumulated pulses) * Kh
 
@@ -358,7 +360,7 @@ static int blueline_decode(r_device *decoder, bitbuffer_t *bitbuffer)
                     "id",               "",             DATA_INT,    context->current_sensor_id,
                     "flags",            "",             DATA_FORMAT, "%02x", DATA_INT, flags,
                     "battery_ok",       "Battery",      DATA_INT,    !battery,
-                    "temperature_C",    "",             DATA_DOUBLE, temperature_C,
+                    "temperature_C",    "Temperature",  DATA_FORMAT, "%.1f C", DATA_DOUBLE, temperature_C,
                     "mic",              "Integrity",    DATA_STRING, "CRC",
                     NULL);
             /* clang-format on */
@@ -397,7 +399,7 @@ static char const *const output_fields[] = {
 
 r_device const blueline;
 
-static r_device *blueline_create(char *arg)
+static r_device *blueline_create(char const *arg)
 {
     r_device *r_dev = decoder_create(&blueline, sizeof(struct blueline_stateful_context));
     if (!r_dev) {
@@ -422,7 +424,7 @@ static r_device *blueline_create(char *arg)
 }
 
 r_device const blueline = {
-        .name        = "BlueLine Innovations Power Cost Monitor",
+        .name        = "BlueLine Innovations Power Cost Monitor, Black & Decker EM100B",
         .modulation  = OOK_PULSE_PPM,
         .short_width = 500,
         .long_width  = 1000,

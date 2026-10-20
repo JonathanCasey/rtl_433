@@ -37,6 +37,7 @@
 #include "output_trigger.h"
 #include "output_rtltcp.h"
 #include "write_sigrok.h"
+#include "sigmf.h"
 #include "mongoose.h"
 #include "compat_time.h"
 #include "logger.h"
@@ -63,37 +64,6 @@
 #else
 #include "getopt/getopt.h"
 #endif
-
-char const *version_string(void)
-{
-    return "rtl_433"
-#ifdef GIT_VERSION
-#define STR_VALUE(arg) #arg
-#define STR_EXPAND(s) STR_VALUE(s)
-            " version " STR_EXPAND(GIT_VERSION)
-#ifdef GIT_BRANCH
-            " branch " STR_EXPAND(GIT_BRANCH)
-#endif
-#ifdef GIT_TIMESTAMP
-            " at " STR_EXPAND(GIT_TIMESTAMP)
-#endif
-#undef STR_VALUE
-#undef STR_EXPAND
-#else
-            " version unknown"
-#endif
-            " inputs file rtl_tcp"
-#ifdef RTLSDR
-            " RTL-SDR"
-#endif
-#ifdef SOAPYSDR
-            " SoapySDR"
-#endif
-#ifdef OPENSSL
-            " with TLS"
-#endif
-            ;
-}
 
 /* helper */
 
@@ -191,8 +161,8 @@ void r_init_cfg(r_cfg_t *cfg)
     // initialize tables
     baseband_init();
 
-    time(&cfg->running_since);
-    time(&cfg->frames_since);
+    time(&cfg->demod->running_since);
+    time(&cfg->demod->frames_since);
     get_time_now(&cfg->demod->now);
 
     list_ensure_size(&cfg->demod->r_devs, 100);
@@ -262,7 +232,7 @@ void r_free_cfg(r_cfg_t *cfg)
 
 /* device decoder protocols */
 
-void register_protocol(r_cfg_t *cfg, r_device *r_dev, char *arg)
+void register_protocol(r_cfg_t *cfg, r_device const *r_dev, char *arg)
 {
     // use arg of 'v', 'vv', 'vvv' as device verbosity
     int dev_verbose = 0;
@@ -306,7 +276,6 @@ void register_protocol(r_cfg_t *cfg, r_device *r_dev, char *arg)
 
 void free_protocol(r_device *r_dev)
 {
-    // free(r_dev->name);
     free(r_dev->decode_ctx);
     free(r_dev);
 }
@@ -333,37 +302,6 @@ void register_all_protocols(r_cfg_t *cfg, unsigned disabled)
 }
 
 /* output helper */
-
-void calc_rssi_snr(r_cfg_t *cfg, pulse_data_t *pulse_data)
-{
-    float ook_high_estimate = pulse_data->ook_high_estimate > 0 ? pulse_data->ook_high_estimate : 1;
-    float ook_low_estimate = pulse_data->ook_low_estimate > 0 ? pulse_data->ook_low_estimate : 1;
-    int const OOK_MAX_HIGH_LEVEL = DB_TO_AMP(0); // Maximum estimate for high level (-0 dB)
-    float ook_max_estimate = ook_high_estimate < OOK_MAX_HIGH_LEVEL ? ook_high_estimate : OOK_MAX_HIGH_LEVEL;
-    float asnr   = ook_max_estimate / ook_low_estimate;
-    float foffs1 = (float)pulse_data->fsk_f1_est / INT16_MAX * cfg->samp_rate / 2.0f;
-    float foffs2 = (float)pulse_data->fsk_f2_est / INT16_MAX * cfg->samp_rate / 2.0f;
-    pulse_data->freq1_hz = (foffs1 + cfg->center_frequency);
-    pulse_data->freq2_hz = (foffs2 + cfg->center_frequency);
-    pulse_data->centerfreq_hz = cfg->center_frequency;
-    pulse_data->depth_bits    = cfg->demod->sample_size * 4;
-    // NOTE: for (CU8) amplitude is 10x (because it's squares)
-    if (cfg->demod->sample_size == 2 && !cfg->demod->use_mag_est) { // amplitude (CU8)
-        pulse_data->range_db = 42.1442f; // 10*log10f(16384.0f) == 20*log10f(128.0f)
-        pulse_data->rssi_db  = 10.0f * log10f(ook_high_estimate) - 42.1442f; // 10*log10f(16384.0f)
-        pulse_data->noise_db = 10.0f * log10f(ook_low_estimate) - 42.1442f; // 10*log10f(16384.0f)
-        pulse_data->snr_db   = 10.0f * log10f(asnr);
-    }
-    else { // magnitude (CU8, CS16)
-        pulse_data->range_db = 84.2884f; // 20*log10f(16384.0f)
-        // lowest (scaled x128) reading at  8 bit is -20*log10(128) = -42.1442 (eff. -36 dB)
-        // lowest (scaled div2) reading at 12 bit is -20*log10(1024) = -60.2060 (eff. -54 dB)
-        // lowest (scaled div2) reading at 16 bit is -20*log10(16384) = -84.2884 (eff. -78 dB)
-        pulse_data->rssi_db  = 20.0f * log10f(ook_high_estimate) - 84.2884f; // 20*log10f(16384.0f)
-        pulse_data->noise_db = 20.0f * log10f(ook_low_estimate) - 84.2884f; // 20*log10f(16384.0f)
-        pulse_data->snr_db   = 20.0f * log10f(asnr);
-    }
-}
 
 char *time_pos_str(r_cfg_t *cfg, unsigned samples_ago, char *buf)
 {
@@ -465,6 +403,8 @@ static char const **convert_csv_fields(r_cfg_t *cfg, char const **fields)
             else if (!strcmp(*p, "rain_rate_mm_h")) *p = "rain_rate_in_h";
             else if (!strcmp(*p, "wind_avg_km_h")) *p = "wind_avg_mi_h";
             else if (!strcmp(*p, "wind_max_km_h")) *p = "wind_max_mi_h";
+            else if (!strcmp(*p, "wind_avg_m_s")) *p = "wind_avg_mi_h";
+            else if (!strcmp(*p, "wind_max_m_s")) *p = "wind_max_mi_h";
         }
     }
     return fields;
@@ -491,7 +431,7 @@ char const **determine_csv_fields(r_cfg_t *cfg, char const *const *well_known, i
     convert_csv_fields(cfg, (char const **)field_list.elems);
 
     if (num_fields)
-        *num_fields = field_list.len;
+        *num_fields = (int)field_list.len;
     return (char const **)field_list.elems;
 }
 
@@ -542,6 +482,9 @@ int run_ook_demods(list_t *r_devs, pulse_data_t *pulse_data)
             case OOK_PULSE_NRZS:
                 p_events += pulse_slicer_nrzs(pulse_data, r_dev);
                 break;
+            case OOK_PULSE_RZI:
+                p_events += pulse_slicer_rzi(pulse_data, r_dev);
+                break;
             // FSK decoders
             case FSK_PULSE_PCM:
             case FSK_PULSE_PWM:
@@ -586,6 +529,7 @@ int run_fsk_demods(list_t *r_devs, pulse_data_t *fsk_pulse_data)
             case OOK_PULSE_DMC:
             case OOK_PULSE_PWM_OSV1:
             case OOK_PULSE_NRZS:
+            case OOK_PULSE_RZI:
                 break;
             case FSK_PULSE_PCM:
                 p_events += pulse_slicer_pcm(fsk_pulse_data, r_dev);
@@ -793,6 +737,16 @@ void data_acquired_handler(r_device *r_dev, data_t *data)
                 free(d->format);
                 d->format = new_format_label;
             }
+            // Convert double type fields ending in _m_s to _mi_h
+            else if ((d->type == DATA_DOUBLE) && str_endswith(d->key, "_m_s")) {
+                d->value.v_dbl = mps2mph(d->value.v_dbl);
+                char *new_label = str_replace(d->key, "_m_s", "_mi_h");
+                free(d->key);
+                d->key = new_label;
+                char *new_format_label = str_replace(d->format, "m/s", "mi/h");
+                free(d->format);
+                d->format = new_format_label;
+            }
             // Convert double type fields ending in _mm to _in
             else if ((d->type == DATA_DOUBLE) && str_endswith(d->key, "_mm")) {
                 d->value.v_dbl = mm2inch(d->value.v_dbl);
@@ -925,19 +879,19 @@ data_t *create_report_data(r_cfg_t *cfg, int level)
     }
 
     data = data_make(
-            "count",            "", DATA_INT, cfg->frames_ook,
-            "fsk",              "", DATA_INT, cfg->frames_fsk,
-            "events",           "", DATA_INT, cfg->frames_events,
+            "count",            "", DATA_INT, cfg->demod->frames_ook,
+            "fsk",              "", DATA_INT, cfg->demod->frames_fsk,
+            "events",           "", DATA_INT, cfg->demod->frames_events,
             NULL);
 
     char since_str[LOCAL_TIME_BUFLEN];
-    format_time_str(since_str, "%Y-%m-%dT%H:%M:%S", cfg->report_time_tz, cfg->frames_since);
+    format_time_str(since_str, "%Y-%m-%dT%H:%M:%S", cfg->report_time_tz, cfg->demod->frames_since);
 
     data = data_make(
             "enabled",          "", DATA_INT, r_devs->len,
             "since",            "", DATA_STRING, since_str,
             "frames",           "", DATA_DATA, data,
-            "stats",            "", DATA_ARRAY, data_array(dev_data_list.len, DATA_DATA, dev_data_list.elems),
+            "stats",            "", DATA_ARRAY, data_array((int)dev_data_list.len, DATA_DATA, dev_data_list.elems),
             NULL);
 
     list_free_elems(&dev_data_list, NULL);
@@ -948,10 +902,10 @@ void flush_report_data(r_cfg_t *cfg)
 {
     list_t *r_devs = &cfg->demod->r_devs;
 
-    time(&cfg->frames_since);
-    cfg->frames_ook = 0;
-    cfg->frames_fsk = 0;
-    cfg->frames_events = 0;
+    time(&cfg->demod->frames_since);
+    cfg->demod->frames_ook = 0;
+    cfg->demod->frames_fsk = 0;
+    cfg->demod->frames_events = 0;
 
     for (void **iter = r_devs->elems; iter && *iter; ++iter) {
         r_device *r_dev = *iter;
@@ -1006,11 +960,11 @@ static int lvlarg_param(char **param, int default_verb)
     return val;
 }
 
-/// Opens the path @p param (or STDOUT if empty or `-`) for append writing, removes leading `,` and `:` from path name.
-static FILE *fopen_output(char const *param)
+/// Returns the path @p param by removing leading `,` and `:` from path name.
+static char const *param_output_path(char const *param)
 {
     if (!param || !*param) {
-        return stdout; // No path given
+        return NULL; // No path given
     }
     while (*param == ',') {
         param++; // Skip all leading `,`
@@ -1019,26 +973,21 @@ static FILE *fopen_output(char const *param)
         param++; // Skip one leading `:`
     }
     if (*param == '-' && param[1] == '\0') {
-        return stdout; // STDOUT requested
+        return NULL; // STDOUT requested
     }
-    FILE *file = fopen(param, "a");
-    if (!file) {
-        fprintf(stderr, "rtl_433: failed to open output file\n");
-        exit(1);
-    }
-    return file;
+    return param;
 }
 
 void add_json_output(r_cfg_t *cfg, char *param)
 {
     int log_level = lvlarg_param(&param, 0);
-    list_push(&cfg->output_handler, data_output_json_create(log_level, fopen_output(param)));
+    list_push(&cfg->output_handler, data_output_json_create(log_level, param_output_path(param)));
 }
 
 void add_csv_output(r_cfg_t *cfg, char *param)
 {
     int log_level = lvlarg_param(&param, 0);
-    list_push(&cfg->output_handler, data_output_csv_create(log_level, fopen_output(param)));
+    list_push(&cfg->output_handler, data_output_csv_create(log_level, param_output_path(param)));
 }
 
 void start_outputs(r_cfg_t *cfg, char const *const *well_known)
@@ -1057,13 +1006,13 @@ void start_outputs(r_cfg_t *cfg, char const *const *well_known)
 void add_log_output(r_cfg_t *cfg, char *param)
 {
     int log_level = lvlarg_param(&param, LOG_TRACE);
-    list_push(&cfg->output_handler, data_output_log_create(log_level, fopen_output(param)));
+    list_push(&cfg->output_handler, data_output_log_create(log_level, param_output_path(param)));
 }
 
 void add_kv_output(r_cfg_t *cfg, char *param)
 {
     int log_level = lvlarg_param(&param, LOG_TRACE);
-    list_push(&cfg->output_handler, data_output_kv_create(log_level, fopen_output(param)));
+    list_push(&cfg->output_handler, data_output_kv_create(log_level, param_output_path(param)));
 }
 
 void add_mqtt_output(r_cfg_t *cfg, char *param)
@@ -1107,7 +1056,7 @@ void add_http_output(r_cfg_t *cfg, char *param)
 void add_trigger_output(r_cfg_t *cfg, char *param)
 {
     // Note: no log_level, we never trigger on logs.
-    list_push(&cfg->output_handler, data_output_trigger_create(fopen_output(param)));
+    list_push(&cfg->output_handler, data_output_trigger_create(param_output_path(param)));
 }
 
 void add_null_output(r_cfg_t *cfg, char *param)
@@ -1129,6 +1078,14 @@ void add_rtltcp_output(r_cfg_t *cfg, char *param)
     list_push(&cfg->raw_handler, raw_output_rtltcp_create(host, port, extra, cfg));
 }
 
+void reopen_outputs(struct r_cfg *cfg)
+{
+    for (size_t i = 0; i < cfg->output_handler.len; ++i) { // list might contain NULLs
+        data_output_t *output = cfg->output_handler.elems[i];
+        data_output_reopen(output);
+    }
+}
+
 void add_sr_dumper(r_cfg_t *cfg, char const *spec, int overwrite)
 {
     // create channels
@@ -1141,34 +1098,70 @@ void add_sr_dumper(r_cfg_t *cfg, char const *spec, int overwrite)
     cfg->sr_execopen = overwrite;
 }
 
+// Construct a file name if no base filename given
+static void generate_dumper_path(r_cfg_t *cfg, file_info_t const *dumper, char *path, unsigned path_size)
+{
+    char const *datatype = file_info_to_ext(dumper);
+    uint32_t freq_hz     = (cfg->frequencies == 0) ? DEFAULT_FREQUENCY : cfg->frequency[0];
+    double freq_mhz      = freq_hz / 1000000.0;
+    double rate_khz      = cfg->samp_rate / 1000.0;
+    for (unsigned cnt = 1;; ++cnt) {
+        // TODO: maybe use something like format_time_str(...);
+        snprintf(path, path_size, "rec%03u_%gM_%gk.%s", cnt, freq_mhz, rate_khz, datatype);
+        if (access(path, F_OK) == -1) {
+            break;
+        }
+    }
+}
+
 void reopen_dumpers(struct r_cfg *cfg)
 {
 #ifndef _WIN32
     for (void **iter = cfg->demod->dumper.elems; iter && *iter; ++iter) {
         file_info_t *dumper = *iter;
         if (dumper->file && (dumper->file != stdout)) {
+            // Construct a file name if no base filename given
+            char path_tmp[64]       = {0};
+            char const *dumper_path = dumper->path;
+            if (!dumper->path || !*dumper->path) {
+                generate_dumper_path(cfg, dumper, path_tmp, sizeof(path_tmp));
+                dumper_path = path_tmp;
+            }
+
             // Get current file inode
             struct stat old_st = {0};
             int ret = fstat(fileno(dumper->file), &old_st);
             if (ret) {
-                fprintf(stderr, "Failed to fstat %s (%d)\n", dumper->path, errno);
+                fprintf(stderr, "Failed to fstat %s (%d)\n", dumper_path, errno);
                 exit(1);
             }
 
             // Get new path inode if available
             struct stat new_st = {0};
-            stat(dumper->path, &new_st);
+            stat(dumper_path, &new_st);
             // ok for stat() to fail, the file might not exist
             if (old_st.st_ino == new_st.st_ino) {
                 continue;
             }
 
             // Reopen the file
-            print_logf(LOG_INFO, "Dumper", "Reopening \"%s\"", dumper->path);
-            fclose(dumper->file);
-            dumper->file = fopen(dumper->path, "wb");
+            print_logf(LOG_INFO, "Dumper", "Reopening \"%s\"", dumper_path);
+            if (dumper->container == FILEFMT_SIGMF) {
+                sigmf_t *sigmf =(sigmf_t *)dumper->file_aux;
+                sigmf_writer_close(sigmf);
+                int r = sigmf_writer_open(sigmf, dumper_path, 0);
+                if (r) {
+                    fprintf(stderr, "Failed to open %s\n", dumper_path);
+                    return;
+                }
+                dumper->file = sigmf->mtar.stream;
+            }
+            else {
+                fclose(dumper->file);
+                dumper->file = fopen(dumper_path, "wb");
+            }
             if (!dumper->file) {
-                fprintf(stderr, "Failed to open %s\n", dumper->path);
+                fprintf(stderr, "Failed to open %s\n", dumper_path);
                 exit(1);
             }
             if (dumper->format == VCD_LOGIC) {
@@ -1186,6 +1179,13 @@ void close_dumpers(struct r_cfg *cfg)
 {
     for (void **iter = cfg->demod->dumper.elems; iter && *iter; ++iter) {
         file_info_t *dumper = *iter;
+
+        if (dumper->container == FILEFMT_SIGMF) {
+            sigmf_writer_close((sigmf_t *)dumper->file_aux);
+            sigmf_free_items((sigmf_t *)dumper->file_aux);
+            dumper->file = NULL;
+        }
+
         if (dumper->file && (dumper->file != stdout)) {
             fclose(dumper->file);
             dumper->file = NULL;
@@ -1218,12 +1218,58 @@ void add_dumper(r_cfg_t *cfg, char const *spec, int overwrite)
     }
 
     file_info_t *dumper = calloc(1, sizeof(*dumper));
-    if (!dumper)
+    if (!dumper) {
         FATAL_CALLOC("add_dumper()");
+    }
     list_push(&cfg->demod->dumper, dumper);
 
     file_info_parse_filename(dumper, spec);
-    if (strcmp(dumper->path, "-") == 0) { /* Write samples to stdout */
+
+    // Construct a file name if no base filename given
+    char path_tmp[64]  = {0};
+    if (!dumper->path || !*dumper->path) {
+        generate_dumper_path(cfg, dumper, path_tmp, sizeof(path_tmp));
+        file_info_parse_filename(dumper, path_tmp); // Note: this leaks path_buf
+        dumper->spec = spec; // restore original spec
+    }
+
+    // Open the output
+    if (dumper->container == FILEFMT_SIGMF) {
+        sigmf_t *sigmf = calloc(1, sizeof(*sigmf));
+        if (!sigmf) {
+            FATAL_CALLOC("add_dumper()");
+        }
+
+        char *datatype = strdup(file_info_to_sigmf_type(dumper));
+        if (!datatype) {
+            WARN_STRDUP("add_dumper()");
+        }
+        char *recorder = strdup("rtl_433");
+        if (!recorder) {
+            WARN_STRDUP("add_dumper()");
+        }
+        char *description = strdup("Sample written by rtl_433");
+        if (!description) {
+            WARN_STRDUP("add_dumper()");
+        }
+
+        sigmf->datatype           = datatype;
+        sigmf->sample_rate        = dumper->sample_rate;
+        sigmf->recorder           = recorder;
+        sigmf->description        = description;
+        sigmf->first_sample_start = 0;
+        sigmf->first_frequency    = dumper->center_frequency;
+        sigmf->data_len           = 0; // Unknown length
+
+        int r = sigmf_writer_open(sigmf, dumper->path, overwrite);
+        if (r) {
+            fprintf(stderr, "Failed to open %s\n", dumper->path);
+            return;
+        }
+        dumper->file = sigmf->mtar.stream;
+        dumper->file_aux = sigmf;
+    }
+    else if (strcmp(dumper->path, "-") == 0) { /* Write samples to stdout */
         dumper->file = stdout;
 #ifdef _WIN32
         _setmode(_fileno(stdin), _O_BINARY);
@@ -1239,6 +1285,9 @@ void add_dumper(r_cfg_t *cfg, char const *spec, int overwrite)
             fprintf(stderr, "Failed to open %s\n", spec);
             exit(1);
         }
+    }
+    if (dumper->path == path_tmp) {
+        dumper->path = NULL; // don't leak the local string
     }
     if (dumper->format == VCD_LOGIC) {
         pulse_data_print_vcd_header(dumper->file, cfg->samp_rate);

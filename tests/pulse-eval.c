@@ -173,8 +173,8 @@ int main(int argc, char *argv[])
     //baseband_init();
 
     char *filename;
-    long n_read;
-    size_t n_samples;
+    int n_read;
+    unsigned n_samples;
     int block_size = 4096000;
     unsigned sample_rate = 250000;
 
@@ -229,76 +229,75 @@ int main(int argc, char *argv[])
 
     n_read = read_buf(filename, cu8_buf, sizeof(uint8_t) * 2 * block_size);
     if (n_read < 1) {
-        ret = 1;
         goto out;
     }
     n_samples = n_read / (sizeof(uint8_t) * 2);
 
-    for (size_t i = 0; i < n_samples * 2; ++i) {
+    for (unsigned i = 0; i < n_samples * 2; ++i) {
         cs8_buf[i] = cu8_buf[i] - 128;
     }
 
     magnitude_est_cu8(cu8_buf, y16_buf, n_samples);
     envelope_detect_nolut(cu8_buf, am16_buf, n_samples);
     demodfm_state_t fm_state;
-    baseband_demod_FM(cu8_buf, fm16_buf, n_samples, &fm_state, 0);
+    baseband_demod_FM(&fm_state, cu8_buf, fm16_buf, n_samples, 250000, 0.1f);
     // envelope_detect(cu8_buf, y16_buf, n_samples);
     // magnitude_est_cu8(cu8_buf, y16_buf, n_samples);
-    // baseband_low_pass_filter(y16_buf, (int16_t *)u16_buf, n_samples, &state);
-    // baseband_demod_FM(cu8_buf, s16_buf, n_samples, &fm_state);
+    // baseband_low_pass_filter(&state, y16_buf, (int16_t *)u16_buf, n_samples);
+    // baseband_demod_FM(&fm_state, cu8_buf, s16_buf, n_samples, 250000, 0.1f);
 
     // moving avgs (AM)
     mavg_t ml = {0};
-    for (size_t i = 0; i < n_samples; ++i) {
+    for (unsigned i = 0; i < n_samples; ++i) {
         mavgl[i] = mavg_avg(&ml);
         mavg_push(&ml, y16_buf[i]);
     }
 
     mavg_t mr = {0};
-    for (size_t i = 0; i < n_samples - 8; ++i) {
+    for (unsigned i = 0; i < n_samples - 8; ++i) {
         mavgr[i] = mavg_avg(&mr);
         mavg_push(&mr, y16_buf[i + 8]);
     }
 
     mavgw_t mw = {0};
-    for (size_t i = 0; i < n_samples; ++i) {
+    for (unsigned i = 0; i < n_samples; ++i) {
         mavgw[i] = mavgw_avg(&mw);
         mavgw_push(&mw, y16_buf[i]);
     }
 
     // slice mavgl by mavgw
-    for (size_t i = 0; i < n_samples; ++i) {
+    for (unsigned i = 0; i < n_samples; ++i) {
         u8_buf[i] = mavgw[i] < 1000 ? 0 : mavgl[i] > mavgw[i] ? 0xff : 0;
     }
 
     // moving devs (FM)
     mavgdev_t vl = {0};
-    for (size_t i = 0; i < n_samples; ++i) {
+    for (unsigned i = 0; i < n_samples; ++i) {
         mdevl[i] = mavgdev_dev(&vl);
         mavgdev_push(&vl, fm16_buf[i]);
     }
 
     mavgdev_t vr = {0};
-    for (size_t i = 0; i < n_samples - 8; ++i) {
+    for (unsigned i = 0; i < n_samples - 8; ++i) {
         mdevr[i] = mavgdev_dev(&vr);
         mavgdev_push(&vr, fm16_buf[i + 8]);
     }
 
     // decaying avgs
     int dl = y16_buf[0];
-    for (size_t i = 0; i < n_samples; ++i) {
+    for (unsigned i = 0; i < n_samples; ++i) {
         davgl[i] = dl;
         dl = (dl + y16_buf[i]) / 2;
     }
 
     int dr = y16_buf[0];
-    for (size_t i = 0; i < n_samples - 7; ++i) {
+    for (unsigned i = 0; i < n_samples - 7; ++i) {
         davgr[i] = dr / 128;
         dr = 2 * dr - y16_buf[i] * 128 + y16_buf[i + 7];
     }
 
     // tests
-    for (size_t i = 0; i < n_samples; ++i) {
+    for (unsigned i = 0; i < n_samples; ++i) {
         y16_buf[i] -= mdevr[i] / 16;
     }
 

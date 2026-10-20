@@ -105,6 +105,9 @@ Skip frames below estimated noise level to reduce cpu load.
 .TP
 [ \fB\-Y\fI ampest | magest\fP ]
 Choose amplitude or magnitude level estimator.
+.TP
+[ \fB\-Y\fI filter=<value>\fP ]
+Manual FM low\-pass filter cutoff to separate simultaneous transmissions: us (1\-9999, e.g. 20), Hz (10000+), or ratio of sample rate (0.0\-1.0).
 .SS "Analyze/Debug options"
 .TP
 [ \fB\-A\fI\fP ]
@@ -301,10 +304,13 @@ invert : invert all bits
 reflect : reflect each byte (MSB first to MSB last)
 .RE
 .RS
-decode_uart : UART 8n1 (10\-to\-8) decode
+decode_uart=<8n1|8n2|8o1> : UART 8n1 (10\-to\-8), 8n2, 8o1 (11\-to\-8) decode
 .RE
 .RS
 decode_dm : Differential Manchester decode
+.RE
+.RS
+decode_mc : Manchester decode
 .RE
 .RS
 match=<bits> : only match if the <bits> are found
@@ -335,7 +341,7 @@ Without this option the default is LOG and KV output. Use "\-F null" to remove t
 Append output to file with :<filename> (e.g. \-F csv:log.csv), defaults to stdout.
 .RE
 .TP
-[ \fB\-F\fI mqtt[:[//]host[:port][,<options>]\fP ]
+[ \fB\-F\fI mqtt[s][:[//]host[:port][,<options>]\fP ]
 (default: localhost:1883)
 .RS
 Specify MQTT server with e.g. \-F mqtt://localhost:1883
@@ -375,6 +381,9 @@ Any topic string overrides the base topic and will expand keys like [/model]
 .RE
 .RS
 E.g. \-F "mqtt://localhost:1883,user=USERNAME,pass=PASSWORD,retain=0,devices=rtl_433[/id]"
+.RE
+.RS
+For TLS use e.g. \-F "mqtts://host,tls_cert=<path>,tls_key=<path>,tls_ca_cert=<path>"
 .RE
 .RS
 With MQTT each rtl_433 instance needs a distinct driver selection. The MQTT Client\-ID is computed from the driver string.
