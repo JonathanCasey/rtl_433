@@ -35,9 +35,8 @@ static void calc_squares(void)
 // Subtract the bias (-128) and get an envelope estimation.
 float envelope_detect(uint8_t const *iq_buf, uint16_t *y_buf, uint32_t len)
 {
-    unsigned long i;
     uint32_t sum = 0;
-    for (i = 0; i < len; i++) {
+    for (uint32_t i = 0; i < len; i++) {
         y_buf[i] = scaled_squares[iq_buf[2 * i ]] + scaled_squares[iq_buf[2 * i + 1]];
         sum += y_buf[i];
     }
@@ -49,9 +48,8 @@ float envelope_detect(uint8_t const *iq_buf, uint16_t *y_buf, uint32_t len)
 /// Using a LUT is slower for O1 and above.
 float envelope_detect_nolut(uint8_t const *iq_buf, uint16_t *y_buf, uint32_t len)
 {
-    unsigned long i;
     uint32_t sum = 0;
-    for (i = 0; i < len; i++) {
+    for (size_t i = 0; i < len; i++) {
         int16_t x = 127 - iq_buf[2 * i];
         int16_t y = 127 - iq_buf[2 * i + 1];
         y_buf[i]  = x * x + y * y; // max 32768, fs 16384
@@ -64,9 +62,8 @@ float envelope_detect_nolut(uint8_t const *iq_buf, uint16_t *y_buf, uint32_t len
 /// Note that magnitude emphasizes quiet signals / deemphasizes loud signals.
 float magnitude_est_cu8(uint8_t const *iq_buf, uint16_t *y_buf, uint32_t len)
 {
-    unsigned long i;
     uint32_t sum = 0;
-    for (i = 0; i < len; i++) {
+    for (uint32_t i = 0; i < len; i++) {
         uint16_t x = abs(iq_buf[2 * i] - 128);
         uint16_t y = abs(iq_buf[2 * i + 1] - 128);
         uint16_t mi = x < y ? x : y;
@@ -81,12 +78,11 @@ float magnitude_est_cu8(uint8_t const *iq_buf, uint16_t *y_buf, uint32_t len)
 /// True Magnitude for CU8 (sqrt can SIMD but float is slow).
 float magnitude_true_cu8(uint8_t const *iq_buf, uint16_t *y_buf, uint32_t len)
 {
-    unsigned long i;
     uint32_t sum = 0;
-    for (i = 0; i < len; i++) {
+    for (uint32_t i = 0; i < len; i++) {
         int16_t x = iq_buf[2 * i] - 128;
         int16_t y = iq_buf[2 * i + 1] - 128;
-        y_buf[i]  = (uint16_t)(sqrt(x * x + y * y) * 128.0); // max 181, scaled 23170, fs 16384
+        y_buf[i]  = (uint16_t)(sqrtf((float)(x * x + y * y)) * 128.0f); // max 181, scaled 23170, fs 16384
         sum += y_buf[i];
     }
     return len > 0 && sum >= len ? MAG_TO_DB((float)sum / len) : MAG_TO_DB(1);
@@ -95,9 +91,8 @@ float magnitude_true_cu8(uint8_t const *iq_buf, uint16_t *y_buf, uint32_t len)
 /// 122/128, 51/128 Magnitude Estimator for CS16 (SIMD has min/max).
 float magnitude_est_cs16(int16_t const *iq_buf, uint16_t *y_buf, uint32_t len)
 {
-    unsigned long i;
     uint32_t sum = 0;
-    for (i = 0; i < len; i++) {
+    for (uint32_t i = 0; i < len; i++) {
         uint32_t x = abs(iq_buf[2 * i]);
         uint32_t y = abs(iq_buf[2 * i + 1]);
         uint32_t mi = x < y ? x : y;
@@ -112,17 +107,20 @@ float magnitude_est_cs16(int16_t const *iq_buf, uint16_t *y_buf, uint32_t len)
 /// True Magnitude for CS16 (sqrt can SIMD but float is slow).
 float magnitude_true_cs16(int16_t const *iq_buf, uint16_t *y_buf, uint32_t len)
 {
-    unsigned long i;
     uint32_t sum = 0;
-    for (i = 0; i < len; i++) {
+    for (uint32_t i = 0; i < len; i++) {
         int32_t x = iq_buf[2 * i];
         int32_t y = iq_buf[2 * i + 1];
-        y_buf[i]  = (int)sqrt(x * x + y * y) >> 1; // max 46341, scaled 23170, fs 16384
+        y_buf[i]  = (int)sqrtf((float)(x * x + y * y)) >> 1; // max 46341, scaled 23170, fs 16384
         sum += y_buf[i];
     }
     return len > 0 && sum >= len ? MAG_TO_DB((float)sum / len) : MAG_TO_DB(1);
 }
 
+void baseband_low_pass_filter_reset(filter_state_t *lowpass_filter)
+{
+    *lowpass_filter = (filter_state_t){0};
+}
 
 // Fixed-point arithmetic on Q0.15
 #define F_SCALE 15
@@ -138,7 +136,7 @@ float magnitude_true_cs16(int16_t const *iq_buf, uint16_t *y_buf, uint32_t len)
     - but the b coeffs are small so it won't happen
     - Q15.14>>14 = Q15.0
 */
-void baseband_low_pass_filter(uint16_t const *x_buf, int16_t *y_buf, uint32_t len, filter_state_t *state)
+void baseband_low_pass_filter(filter_state_t *state, uint16_t const *x_buf, int16_t *y_buf, uint32_t len)
 {
     ///  [b,a] = butter(1, 0.01) -> 3x tau (95%) ~100 samples
     //static int const a[FILTER_ORDER + 1] = {FIX(1.00000) >> 1, FIX(0.96907) >> 1};
@@ -155,7 +153,7 @@ void baseband_low_pass_filter(uint16_t const *x_buf, int16_t *y_buf, uint32_t le
 
     // Calculate first sample
     y_buf[0] = (a[1] * state->y[0] + b[0] * (x_buf[0] + state->x[0])) >> (F_SCALE - 1); // note: prescaled, b[0]==b[1]
-    for (unsigned long i = 1; i < len; i++) {
+    for (uint32_t i = 1; i < len; i++) {
         y_buf[i] = (a[1] * y_buf[i - 1] + b[0] * (x_buf[i] + x_buf[i - 1])) >> (F_SCALE - 1); // note: prescaled, b[0]==b[1]
     }
 
@@ -197,8 +195,13 @@ static int16_t atan2_int16(int32_t y, int32_t x)
     return angle;
 }
 
+void baseband_demod_FM_reset(demodfm_state_t *demod_fm)
+{
+    *demod_fm = (demodfm_state_t){0};
+}
+
 /// Fast Instantaneous frequency and Low Pass filter, CU8 samples
-void baseband_demod_FM(uint8_t const *x_buf, int16_t *y_buf, unsigned long num_samples, uint32_t samp_rate, float low_pass, demodfm_state_t *state)
+void baseband_demod_FM(demodfm_state_t *state, uint8_t const *x_buf, int16_t *y_buf, uint32_t num_samples, uint32_t samp_rate, float low_pass)
 {
     // Select filter coeffs, [b,a] = butter(1, cutoff)
     // e.g [b,a] = butter(1, 0.1) -> 3x tau (95%) ~10 samples, 250k -> 40us, 1024k -> 10us
@@ -211,8 +214,8 @@ void baseband_demod_FM(uint8_t const *x_buf, int16_t *y_buf, unsigned long num_s
         } else if (low_pass >= 1.0f) {
             low_pass = 1e6f / low_pass / samp_rate;
         }
-        print_logf(LOG_NOTICE, "Baseband", "low pass filter for %u Hz at cutoff %.0f Hz, %.1f us",
-                samp_rate, samp_rate * low_pass, 1e6 / (samp_rate * low_pass));
+        print_logf(LOG_NOTICE, "Baseband", "FM low pass filter for %u Hz at cutoff %.0f Hz, %.1f us",
+                samp_rate, samp_rate * (double)low_pass, 1e6 / (samp_rate * (double)low_pass));
         double ita  = 1.0 / tan(M_PI_2 * low_pass);
         double gain = 1.0 / (1.0 + ita) / 2; // prescaled by div 2
         state->alp_16[0] = FIX(1.0);
@@ -291,7 +294,7 @@ static int32_t atan2_int32(int32_t y, int32_t x)
 }
 
 /// Fast Instantaneous frequency and Low Pass filter, CS16 samples.
-void baseband_demod_FM_cs16(int16_t const *x_buf, int16_t *y_buf, unsigned long num_samples, uint32_t samp_rate, float low_pass, demodfm_state_t *state)
+void baseband_demod_FM_cs16(demodfm_state_t *state, int16_t const *x_buf, int16_t *y_buf, uint32_t num_samples, uint32_t samp_rate, float low_pass)
 {
     // Select filter coeffs, [b,a] = butter(1, cutoff)
     // e.g [b,a] = butter(1, 0.1) -> 3x tau (95%) ~10 samples, 250k -> 40us, 1024k -> 10us
@@ -305,7 +308,7 @@ void baseband_demod_FM_cs16(int16_t const *x_buf, int16_t *y_buf, unsigned long 
             low_pass = 1e6f / low_pass / samp_rate;
         }
         print_logf(LOG_NOTICE, "Baseband", "low pass filter for %u Hz at cutoff %.0f Hz, %.1f us",
-                samp_rate, samp_rate * low_pass, 1e6 / (samp_rate * low_pass));
+                samp_rate, samp_rate * (double)low_pass, 1e6 / (samp_rate * (double)low_pass));
         double ita  = 1.0 / tan(M_PI_2 * low_pass);
         double gain = 1.0 / (1.0 + ita);
         state->alp_32[0] = FIX32(1.0);

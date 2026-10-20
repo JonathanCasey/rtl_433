@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # coding=utf-8
 
 from __future__ import print_function
@@ -284,11 +284,35 @@ mappings = {
         }
     },
 
+    "conductivity_uS_cm": {
+        "device_type": "sensor",
+        "object_suffix": "EC",
+        "config": {
+            "device_class": "conductivity",
+            "name": "Conductivity",
+            "unit_of_measurement": "μS/cm",
+            "value_template": "{{ value|float }}",
+            "state_class": "measurement"
+        }
+    },
+
     "detect_wet": {
         "device_type": "binary_sensor",
         "object_suffix": "moisture",
         "config": {
             "name": "Water Sensor",
+            "device_class": "moisture",
+            "force_update": "true",
+            "payload_on": "1",
+            "payload_off": "0"
+        }
+    },
+
+    "leaking": {
+        "device_type": "binary_sensor",
+        "object_suffix": "leak",
+        "config": {
+            "name": "Leak",
             "device_class": "moisture",
             "force_update": "true",
             "payload_on": "1",
@@ -350,7 +374,7 @@ mappings = {
         "config": {
             "device_class": "wind_speed",
             "name": "Wind Speed",
-            "unit_of_measurement": "mi/h",
+            "unit_of_measurement": "mph",
             "value_template": "{{ value|float }}",
             "state_class": "measurement"
         }
@@ -535,6 +559,17 @@ mappings = {
         }
     },
 
+    "closed": {
+        "device_type": "binary_sensor",
+        "object_suffix": "opening",
+        "config": {
+            "device_class": "opening",
+            "force_update": "true",
+            "payload_on": "0",
+            "payload_off": "1"
+        }
+    },
+
     "rssi": {
         "device_type": "sensor",
         "object_suffix": "rssi",
@@ -657,8 +692,8 @@ mappings = {
         "device_type": "sensor",
         "object_suffix": "uv",
         "config": {
-            "name": "UV Index",
-            "unit_of_measurement": "UV Index",
+            "name": "UV Value",
+            "unit_of_measurement": "UV",
             "value_template": "{{ value|float|round(1) }}",
             "state_class": "measurement"
         }
@@ -732,6 +767,26 @@ mappings = {
         "object_suffix": "consumption",
         "config": {
             "name": "SCMplus Consumption Value",
+            "value_template": "{{ value|int }}",
+            "state_class": "total_increasing",
+        }
+    },
+
+    "reading": {
+        "device_type": "sensor",
+        "object_suffix": "reading",
+        "config": {
+            "name": "Reading",
+            "value_template": "{{ value|int }}",
+            "state_class": "total_increasing",
+        }
+    },
+
+    "daily_reading": {
+        "device_type": "sensor",
+        "object_suffix": "daily_reading",
+        "config": {
+            "name": "Daily Reading",
             "value_template": "{{ value|int }}",
             "state_class": "total_increasing",
         }
@@ -954,8 +1009,13 @@ def publish_config(mqttc, topic, model, object_id, mapping, key=None):
         config["state_topic"] = topic
         config["unique_id"] = object_name
         config["name"] = readable_name
-    config["device"] = { "identifiers": [object_id], "name": object_id, "model": model, "manufacturer": "rtl_433" }
 
+    try:
+        hassio_device_mfgr, hassio_device_modl = model.split('-', 1)
+        config["device"] = { "identifiers": [object_id], "name": object_id, "model": hassio_device_modl, "manufacturer": hassio_device_mfgr }
+    except ValueError:
+        config["device"] = { "identifiers": [object_id], "name": object_id, "model": model, "manufacturer": "rtl_433" }
+  
     if args.force_update:
         config["force_update"] = "true"
 
@@ -987,7 +1047,7 @@ def bridge_event_to_hass(mqttc, topic_prefix, data):
         logging.warning("No suitable identifier found for model: %s", model)
         return
 
-    if args.ids and "id" in data and data.get("id") not in args.ids:
+    if args.ids and "id" in data and str(data.get("id")) not in args.ids:
         # not in the safe list
         logging.debug("Device (%s) is not in the desired list of device ids: [%s]" % (data["id"], ids))
         return
@@ -1096,7 +1156,7 @@ if __name__ == "__main__":
     parser.add_argument("-x", "--expire-after", type=int,
                         dest="expire_after",
                         help="Number of seconds with no updates after which the sensor becomes unavailable")
-    parser.add_argument("-I", "--ids", type=int, nargs="+",
+    parser.add_argument("-I", "--ids", type=str, nargs="+",
                         help="ID's of devices that will be discovered (omit for all)")
     args = parser.parse_args()
 
@@ -1121,7 +1181,7 @@ if __name__ == "__main__":
         logging.warning("User or password is not set. Check credentials if subscriptions do not return messages.")
 
     if args.ids:
-        ids = ', '.join(str(id) for id in args.ids)
+        ids = ', '.join(args.ids)
         logging.info("Only discovering devices with ids: [%s]" % ids)
     else:
         logging.info("Discovering all devices")

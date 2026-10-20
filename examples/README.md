@@ -11,7 +11,7 @@ require writing new code, with some kind of filtering and
 transformation.
 
 Generally, python scripts should work with relatively recent Python 3.
-(While they might work with 2.7, no one is paying attention to that.)
+(Python 2.7 is no longer supported.)
 
 These scripts typically send data to some other system, store it in a
 database, or process it in some way.  Recall that rtl_433's philosophy
@@ -24,6 +24,14 @@ encoding is that it is machine parseble and that's what we want to do.
 
 At some point, generally-usable scripts should perhaps be promoted
 from examples.
+
+## Other Code for use with rtl_433
+
+There exists other code for use wtih rtl_433 that is not contained
+within the rtl_433 repository.  Those contemplating using or adapting
+one of these scripts should also look at the [list of software for use
+with rtl_433 in the
+wik](https://github.com/merbanan/rtl_433/wiki/Built-with-rtl_433!).
 
 # Styles of Plumbing
 

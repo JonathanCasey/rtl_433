@@ -242,7 +242,7 @@ static int term_get_bg(void)
     if (!colorfgbg) {
         return 0; // default dark theme
     }
-    char *p = strrchr(colorfgbg, ';');
+    char const *p = strrchr(colorfgbg, ';');
     if (!p) {
         return 0; // default dark theme
     }
@@ -559,7 +559,7 @@ int term_help_fprintf(FILE *fp, _Printf_format_string_ char const *format, ...)
 {
     int len;
     va_list args;
-    char buf[4000];
+    char buf[8000];
 
     va_start(args, format);
 

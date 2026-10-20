@@ -268,7 +268,7 @@
     DECL(chamberlain_cwpirc) \
     DECL(thermopro_tp829b) \
     DECL(arad_ms_meter) \
-    DECL(geevon) \
+    DECL(geevon_tx16) \
     DECL(fineoffset_wh46) \
     DECL(vevor_7in1) \
     DECL(arexx_ml) \
@@ -285,11 +285,120 @@
     DECL(tpms_gm) \
     DECL(rainpoint_hcs012arf) \
     DECL(apator_metra_erm30) \
-    DECL(digoo) \
-
+    DECL(thermopro_tx7b) \
+    DECL(nexus_sauna) \
+    DECL(homelead_hg9901) \
+    DECL(maverick_xr50) \
+    DECL(orion_endpoint) \
+    DECL(fineoffset_wh43) \
+    DECL(baldr_therm) \
+    DECL(bm5) \
+    DECL(universalfanctrl) \
+    DECL(fineoffset_ws85) \
+    DECL(oria_wa150km) \
+    DECL(ec3k) \
+    DECL(orion_endpoint_2020) \
+    DECL(geevon_tx19) \
+    DECL(wallarge_cltx001) \
+    DECL(sainlogic_sa8) \
+    DECL(thermopro_tp86xb) \
+    DECL(tpms_airpuxem) \
+    DECL(apator_metra_eitn30) \
+    DECL(thermopro_tp211b) \
+    DECL(tpms_trw_ook) \
+    DECL(tpms_trw_fsk) \
+    DECL(govee_h5059) \
+    DECL(astrostart_2000) \
+    DECL(compustar_1wg3r) \
+    DECL(chrysler_car_remote) \
+    DECL(nidec_car_remote) \
+    DECL(audiovox_pro_oe3b) \
+    DECL(hcs361_txwak_0_bsel_0) \
+    DECL(hcs361_txwak_0_bsel_1) \
+    DECL(hcs361_txwak_1_bsel_0) \
+    DECL(hcs361_txwak_1_bsel_1) \
+    DECL(hcs361_vpwm_1_bsel_0) \
+    DECL(hcs361_vpwm_1_bsel_1) \
+    DECL(six_sc_two_car_remote) \
+    DECL(gm_car_remote) \
+    DECL(siemens_5wy72xx_car_remote) \
+    DECL(alps_fwb1u545_car_remote) \
+    DECL(continental_car_remote) \
+    DECL(code_alarm_frdpc2000_car_remote) \
+    DECL(rfm69_lowpowerlab_moteino) \
+    DECL(shenzhen_wale_wl_th6r) \
+    DECL(ctt_life_power_hybrid) \
+    DECL(tpms_schrader_motorcycle) \
+    DECL(tmps_gear_hive) \
+    DECL(lacrosse_tx22uit) \
+    DECL(lacrosse_tx22uit_ook) \
+    DECL(thermor_a6n_132tx) \
+    DECL(acurite_985) \
+    DECL(honda_keyfob) \
+    DECL(schrader_MRXBC5A4) \
+    DECL(hcs362_pwm) \
+    DECL(hcs362_mc) \
+    DECL(grill_thermometer) \
+    DECL(tr_502msv) \
+    DECL(opel_mokka) \
+    DECL(rfxmeter) \
+    DECL(martec_mplcd) \
+    DECL(netatmo_thw) \
+    DECL(omni) \
+    DECL(elster_power_meter) \
+    DECL(florabest) \
+    DECL(holman_ws5029pwm_ook) \
+    DECL(esun_en2053) \
+    DECL(vivint) \
+    DECL(tpms_smartire) \
+    DECL(dickert_pwm) \
+    DECL(fsl_scoreboard) \
+    DECL(en2058) \
+    DECL(tfa_30_390x) \
+    DECL(watts_wfht_rf) \
+    DECL(govee_h5310) \
+    DECL(govee_h5112) \
+    DECL(ecoeye) \
+    DECL(schrader_NIS315G3) \
+    DECL(fineoffset_wh52) \
+    DECL(tpms_imars_t240) \
+    DECL(tpms_jansite_ty468) \
+    DECL(fineoffset_wh5rb) \
+    DECL(auriol_hg04641a) \
+    DECL(eberle_instat868r1) \
+    DECL(watchman_plus) \
+    DECL(baldr_hcs528arf) \
+    DECL(kidde_smoke) \
+    DECL(tpms_jansite_ty588) \
+    DECL(oregon_scientific_wmr500) \
+    DECL(elsner_solexa) \
+    DECL(tpms_mercedes_benz) \
+    DECL(watts_vision) \
+    DECL(tfa_30_3307) \
+    DECL(cavius_door) \
+    DECL(cotech_ft0203) \
+    DECL(twogig_key2e) \
+    DECL(hanwell_ml4000) \
+    DECL(elero) \
+    DECL(elster_power_meter2) \
+    DECL(lacrosse_ws6868_tx232th) \
+    DECL(lacrosse_ws6868_tx231rw) \
+    DECL(mcpower_kinetic) \
+    DECL(typhur_sync_gold) \
+    DECL(tpms_sefis_m3) \
+    DECL(radian) \
+    DECL(tpms_jeep) \
+    DECL(tpms_honda) \
+    DECL(cotech_36_7900) \
+    DECL(silver_spring_mesh) \
+    DECL(bresser_garden) \
+    DECL(neptune_r900bcd) \
+    DECL(olympia_9571) \
     /* Add new decoders here. */
+    DECL(digoo)
 
-#define DECL(name) extern r_device name;
+#define DECL(name) extern r_device const name;
+DECL(flex_decoder)
 DEVICES
 #undef DECL
 

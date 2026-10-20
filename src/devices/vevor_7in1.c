@@ -13,16 +13,23 @@
 
 #include "decoder.h"
 
-/**
+/** @fn static int vevor_7in1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
 Vevor Wireless Weather Station 7-in-1.
 
 Manufacturer : Fujian Youtong Industries Co., Ltd. rebrand under Vevor name.
 Reference:
 
-- YT60231, Vevor Weather Station 7-in-1
+- YT60231, Vevor Weather Station 7-in-1, 868 MHz (EU)
+- YT60234, Vevor Weather Station 7-in-1, 915 MHz (US)
 - R53 / R56 Fujian Youtong Industries , FCC ID : https://fccid.io/2AQBD-R53, https://fccid.io/2AQBD-R56
 
-S.a. issue #3020
+S.a. issue #3020 and issue #3591
+
+Radio parameters, US 915 MHz YT60234 (measured, issue #3591):
+
+- 2-FSK, +-37 kHz deviation, ~11.26 kbaud, one ~85 ms burst every 20.000 s, all sensors in every frame.
+- Measured center 915.031 MHz on one unit (nominal 915.000 MHz), so allow for a small frequency offset.
+- Same protocol and checksum as the 868 MHz EU YT60231; decoded by this decoder unchanged.
 
 Data Layout:
 
@@ -38,12 +45,12 @@ Data Layout:
 - BF: {8} Battery Flag 0x9d = battery low, 0x1d = normal battery, may be pairing button to be confirmed ?
 - T: {12} temperature in C, offset 500, scale 10
 - H:  {8} humidity %
-- W: {16} Wind speed, scale 10, offset 257 (0x0101)
-- G:  {8} Wind Gust m/s scale 1.5
-- D: {12} Wind Direction, offset 257
-- R: {16} Total Rain mm/m2, 0.4 mm/m²/tips , offset 257
+- W: {16} Wind speed, scale 8.333 (km/h), offset 1 per byte
+- G:  {8} Wind Gust, scale 1.25 (km/h)
+- D: {12} Wind Direction, offset 1 per encoded byte
+- R: {16} Total Rain mm/m2, 0.233 mm/m²/tip, offset 1 per byte
 - U:  {5} UV index from 0 to 16, offset 1
-- L: {1 + 15 bit} Lux value, if first bit = 1 , then x 10 the 15 bit (offset 257).
+- L: {1 + 15 bit} Lux value, if first bit = 1, then x 10 the 15 bit, offset 1 per byte.
 - ?: unknown, fixed values
 - A:  {4} fixed values of 0xA
 - 0:  {4} fixed values of 0x0
@@ -93,6 +100,25 @@ static int vevor_7in1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
             continue;
         }
 
+        // Verify the second TX counter, including the uint8_t wrap from
+        // 0xff to 0x00.
+        if (b[20] != (uint8_t)(b[18] + 1)) {
+            decoder_logf(decoder, 2, __func__, "TX counter mismatch: %02x -> %02x", b[18], b[20]);
+            ret = DECODE_FAIL_MIC;
+            continue;
+        }
+
+        // Multi-byte values are transmitted with an offset of one applied to
+        // each byte independently. uint8_t conversion wraps 0x00 to 0xff.
+        b[8]  = b[8] - 1;
+        b[9]  = b[9] - 1;
+        b[11] = b[11] - 1;
+        b[12] = b[12] - 1;
+        b[13] = b[13] - 1;
+        b[14] = b[14] - 1;
+        b[16] = b[16] - 1;
+        b[17] = b[17] - 1;
+
         //int kind        = ((b[1] & 0xf0) >> 4);
         int channel     = (b[1] & 0x0f);
         int id          = (b[2] << 8) | b[3];
@@ -103,15 +129,15 @@ static int vevor_7in1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
             int temp_raw      = (b[5] << 8) | b[6];
             float temp_c      = (temp_raw - 500) * 0.1f;
             int humidity      = b[7];
-            int wind_raw      = ((b[8] << 8) | b[9]) - 257; // need to remove 0x0101.
-            float speed_kmh   = wind_raw / 10.0f  ; // wind_raw / 36.0f for m/s
+            int wind_raw      = (b[8] << 8) | b[9];
+            float speed_kmh   = wind_raw / 8.333f; // wind_raw / 30.0f for m/s
             int gust_raw      = b[10];
-            float gust_kmh    = gust_raw / 1.5f ; // gust_raw / 1.5f / 3.6f m/s, + 0.1f offset from the weather display
-            int direction_deg = (((b[11] & 0x0f) << 8) | b[12]) - 257; // need to remove 0x101.
-            int rain_raw      = ((b[13] << 8) | b[14]) - 257; // need to remove 0x101.
-            float rain_mm     = rain_raw * 0.233f; // calculation is 0.43f but display is 0.5f
+            float gust_kmh    = gust_raw / 1.25f; // gust_raw / 4.5f for m/s
+            int direction_deg = ((b[11] & 0x0f) << 8) | b[12];
+            int rain_raw      = (b[13] << 8) | b[14];
+            float rain_mm     = rain_raw * 0.233f;
             int uv_index      = (b[15] & 0x1f) - 1;
-            int light_lux     = ((b[16] << 8) | b[17]) - 257; // need to remove 0x0101.
+            int light_lux     = (b[16] << 8) | b[17];
             int lux_multi     = (light_lux & 0x8000) >> 15;
 
             if (lux_multi == 1) {
@@ -130,7 +156,7 @@ static int vevor_7in1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
                     "wind_max_km_h",    "Wind max speed",   DATA_FORMAT, "%.1f km/h",  DATA_DOUBLE, gust_kmh,
                     "wind_dir_deg",     "Wind Direction",   DATA_INT,    direction_deg,
                     "rain_mm",          "Total rainfall",   DATA_FORMAT, "%.1f mm",  DATA_DOUBLE, rain_mm,
-                    "uv",               "UV Index",         DATA_FORMAT, "%u", DATA_INT, uv_index,
+                    "uvi",              "UV Index",         DATA_FORMAT, "%.0f", DATA_DOUBLE, (double)uv_index,
                     "light_lux",        "Lux",              DATA_FORMAT, "%u", DATA_INT, light_lux,
                     "mic",              "Integrity",        DATA_STRING, "CHECKSUM",
                     NULL);
@@ -155,7 +181,7 @@ static char const *const output_fields[] = {
         "wind_max_km_h",
         "rain_mm",
         "wind_dir_deg",
-        "uv",
+        "uvi",
         "light_lux",
         "mic",
         NULL,
