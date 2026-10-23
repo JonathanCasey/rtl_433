@@ -394,8 +394,8 @@
     DECL(bresser_garden) \
     DECL(neptune_r900bcd) \
     DECL(olympia_9571) \
+    DECL(digoo) \
     /* Add new decoders here. */
-    DECL(digoo)
 
 #define DECL(name) extern r_device const name;
 DECL(flex_decoder)

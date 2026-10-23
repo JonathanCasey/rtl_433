@@ -104,7 +104,7 @@ static int digoo_callback(r_device *decoder, bitbuffer_t *bitbuffer)
     return 1;
 }
 
-static char *output_fields[] = {
+static char const *const output_fields[] = {
         "model",
         "id",
         "cmd",
@@ -115,7 +115,7 @@ static char *output_fields[] = {
         NULL,
 };
 
-r_device digoo = {
+r_device const digoo = {
         .name        = "Digoo PIR / Contact Sensor / Remote FOB",
         .modulation  = OOK_PULSE_PWM,
         .short_width = 400,
